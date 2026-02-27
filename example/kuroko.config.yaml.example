@@ -1,0 +1,20 @@
+# kuroko (旧：秘書) 設定ファイルサンプル
+version: 1
+
+# 監視対象のプロジェクト一覧
+projects:
+  - name: multi-llm-agent-cli
+    root: /Users/user/workspace/multi-llm-agent-cli
+  - name: vocal_insight_ai
+    root: /Users/user/workspace/vocal_insight_ai
+  - name: kuroko
+    root: /Users/user/workspace/kuroko/repo
+
+# 収集のデフォルト設定
+defaults:
+  # 1プロジェクトあたり最大何件のcheckpointファイルを読み込むか
+  per_project_files: 5
+  # 各プロジェクト内のcheckpointが保存されているディレクトリ名
+  checkpoint_dir: checkpoint
+  # 検索対象のファイルパターン
+  filename_glob: "*.md"

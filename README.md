@@ -18,10 +18,31 @@
 ```bash
 git clone https://github.com/aoitan/kuroko.git
 cd kuroko
-uv sync
+uv tool install --editable .
 ```
 
 ## 使い方
+
+### 証跡（checkpoint）の作成
+
+kurokoは、各プロジェクトの `checkpoint/` ディレクトリ配下にある特定の形式のMarkdownファイルを読み込みます。
+
+#### ファイル命名規則
+- `YYYY-MM-DD__{project_name}__ISSUE-{number}.md`
+- `YYYY-MM-DD__{project_name}__misc.md`
+
+#### ファイル形式（タイムライン）
+`# Timeline` セクションの下に、以下の形式でエントリを追記します。
+
+```md
+# Timeline
+
+- HH:MM [phase] act: <やったこと>
+  evd: <根拠（コマンド、ログ、リンクなど）>
+  block: <詰まり（無ければ 'なし'）>
+```
+
+※ `phase` は `planning`, `coding`, `review`, `fix`, `closing` のいずれかを推奨します。
 
 ### 設定ファイルの準備
 
@@ -33,23 +54,30 @@ version: 1
 projects:
   - name: my-project
     root: /path/to/my-project
+defaults:
+  max_depth: 2  # 探索する深さ（デフォルトは無制限）
 ```
 
 ### コマンド
 
 ```bash
 # 直近の活動を表示
-uv run kuroko recent
+kuroko recent
 
 # ブロッカーを表示
-uv run kuroko blockers
+kuroko blockers
 
 # 各プロジェクトの最新ステータスを表示
-uv run kuroko status
+kuroko status
 
 # LLM用にJSON形式で出力
-uv run kuroko status --json-output
+kuroko status --json-output
 ```
+
+## LLMエージェントへの統合（推奨）
+
+LLMエージェント（Gemini CLIなど）を使用している場合、`checkpoint` スキルを導入することで、エージェントが自動的に適切な形式で証跡を残せるようになります。
+具体的なスキルの定義例は [example/checkpoint_skill.md](example/checkpoint_skill.md) を参照してください。
 
 ## 免責事項 (Disclaimer)
 

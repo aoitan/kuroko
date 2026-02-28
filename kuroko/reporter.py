@@ -11,6 +11,8 @@ PHASE_MAP = {
 }
 
 def _shorten_phase(phase: str) -> str:
+    if not phase:
+        return ""
     return PHASE_MAP.get(phase.lower(), phase)
 
 def generate_report(
@@ -59,13 +61,14 @@ def generate_report(
         e = latest_by_proj[proj]
         issue_str = f"#{e['issue']}" if e.get('issue') else "-"
         phase_str = _shorten_phase(e['phase'])
-        lines.append(f"| {e['date']} | {e['time']} | {phase_str} | {e['project']} | {issue_str} | {e['act']} |")
+        act_str = e['act'].replace('|', '&#124;')
+        lines.append(f"| {e['date']} | {e['time']} | {phase_str} | {e['project']} | {issue_str} | {act_str} |")
     lines.append("")
     
     # 3) Blockers
     lines.append("## Blockers")
-    block_ignore = ["なし", "none", "n/a", "na", "-"]
-    blockers = [e for e in entries if e.get('block') and e['block'].strip().lower() not in block_ignore]
+    from kuroko.constants import BLOCK_IGNORE
+    blockers = [e for e in entries if e.get('block') and e['block'].strip().lower() not in BLOCK_IGNORE]
     
     if not blockers:
         lines.append("No active blockers.")
@@ -79,7 +82,11 @@ def generate_report(
             details = []
             details.append(f"  - act: {e['act']}")
             if include_evidence and e.get('evd'):
-                details.append(f"  - evd: `{e['evd']}`")
+                details.append("  - evd:")
+                details.append("    ```")
+                for line in e['evd'].split('\n'):
+                    details.append(f"    {line}")
+                details.append("    ```")
             if include_path and e.get('file_path'):
                 details.append(f"  - file_path: `{e['file_path']}`")
                 
@@ -99,7 +106,8 @@ def generate_report(
         
     for date in sorted(by_date.keys(), reverse=True):
         lines.append(f"### {date}")
-        for e in by_date[date]:
+        day_entries = sorted(by_date[date], key=lambda x: x["time"], reverse=True)
+        for e in day_entries:
             issue_str = f"#{e['issue']}" if e.get('issue') else "-"
             phase_str = _shorten_phase(e['phase'])
             lines.append(f"- {e['time']} {phase_str} {e['project']} {issue_str} {e['act']}")

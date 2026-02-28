@@ -6,16 +6,29 @@ from datetime import datetime
 from kuroko.config import KurokoConfig
 from kuroko.parser import parse_checkpoint_file
 
-def collect_checkpoints(config: KurokoConfig) -> List[Dict]:
+def collect_checkpoints(
+    config: KurokoConfig,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    projects: Optional[List[str]] = None,
+    issue: Optional[str] = None,
+    per_project_files: Optional[int] = None
+) -> List[Dict]:
     all_entries = []
     
+    # max file count configuration
+    max_files = per_project_files if per_project_files is not None else config.defaults.per_project_files
+    
     for project in config.projects:
+        # Filter by project names
+        if projects and project.name not in projects:
+            continue
+            
         root_path = Path(project.root)
         if not root_path.exists():
             continue
             
         # 再帰的に checkpoint ディレクトリ内のファイルを探索
-        # パターン: root/**/checkpoint/*.md
         pattern = str(root_path / "**" / config.defaults.checkpoint_dir / config.defaults.filename_glob)
         files = glob.glob(pattern, recursive=True)
         
@@ -25,31 +38,21 @@ def collect_checkpoints(config: KurokoConfig) -> List[Dict]:
         for f in files:
             file_path = Path(f)
             if max_depth is not None:
-                # root から checkpoint フォルダまでの深さを計算
-                # 例: root/a/b/checkpoint/file.md -> 相対パス: a/b/checkpoint/file.md -> parts: ('a', 'b', 'checkpoint', 'file.md')
-                # checkpoint ディレクトリ自体の位置を確認
                 try:
                     rel_parts = file_path.relative_to(root_path).parts
-                    # checkpoint ディレクトリがどこにあるか探し、その深さを判定
-                    # 最初の checkpoint フォルダまでの深さを制限対象とする
                     checkpoint_idx = rel_parts.index(config.defaults.checkpoint_dir)
                     if checkpoint_idx > max_depth:
                         continue
                 except (ValueError, KeyError):
-                    # checkpoint ディレクトリが見つからない場合はスキップ
                     continue
-            
             filtered_files.append(file_path)
             
-        # 各プロジェクト内での最新順ソート
         filtered_files.sort(key=lambda x: x.name, reverse=True)
-        # プロジェクトごとの上限件数
-        filtered_files = filtered_files[:config.defaults.per_project_files]
+        filtered_files = filtered_files[:max_files]
         
         for path_obj in filtered_files:
             filename = path_obj.name
             
-            # ファイル名からメタデータを抽出
             meta_match = re.match(r'(\d{4}-\d{2}-\d{2})__(.*?)__(.*)\.md', filename)
             if meta_match:
                 date_str = meta_match.group(1)
@@ -72,8 +75,16 @@ def collect_checkpoints(config: KurokoConfig) -> List[Dict]:
                         "issue": issue_id,
                         "file_path": str(path_obj)
                     })
+                    
+                    # Apply filters
+                    if since and entry["date"] < since:
+                        continue
+                    if until and entry["date"] > until:
+                        continue
+                    if issue and entry["issue"] != str(issue):
+                        continue
+                        
                     all_entries.append(entry)
                     
-    # 全エントリを日付と時間でソート
     all_entries.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
     return all_entries

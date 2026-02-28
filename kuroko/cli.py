@@ -1,9 +1,11 @@
 import click
 import json
 import sys
+from pathlib import Path
 from datetime import datetime
 from kuroko.config import load_config
 from kuroko.collector import collect_checkpoints
+from kuroko.reporter import generate_report
 
 @click.group()
 @click.option('--config', default=None, help='Path to config file.')
@@ -13,10 +15,10 @@ def main(ctx, config):
     cfg = load_config(config)
     
     if not cfg.projects and config is None:
-        # 設定ファイルが見つからず、プロジェクトも未定義の場合
         click.echo("Warning: No projects defined. Please create kuroko.config.yaml.", err=True)
         
     ctx.obj['config'] = cfg
+    # default fetch for other commands
     ctx.obj['entries'] = collect_checkpoints(cfg)
 
 @main.command()
@@ -66,6 +68,69 @@ def status(ctx, json_output):
     else:
         for e in entries:
             print(f"{e['project']}: {e['date']} {e['time']} [{e['phase']}] {e['act']}")
+
+@main.command()
+@click.argument('output_path', type=click.Path())
+@click.option('--per-project-files', type=int, default=5, help='Max number of checkpoint files read per project.')
+@click.option('--since', help='Include entries on/after the date (YYYY-MM-DD).')
+@click.option('--until', help='Include entries on/before the date (YYYY-MM-DD).')
+@click.option('--project', multiple=True, help='Filter to one project name (can be repeated).')
+@click.option('--issue', help='Filter to one issue id (e.g., 153).')
+@click.option('--include-path', is_flag=True, help='Include file_path in details and Sources section.')
+@click.option('--include-evidence/--no-include-evidence', default=True, help='Include evd field in details sections.')
+@click.option('--collapse-details/--no-collapse-details', default=True, help='Wrap per-item detail blocks in <details>.')
+@click.option('--title', default='Kuroko Report', help='Title at the top of the report.')
+@click.pass_context
+def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, collapse_details, title):
+    """Generate a human-readable Markdown report."""
+    cfg = ctx.obj['config']
+    
+    # Clean up issue input if user passes "ISSUE-153" or "#153"
+    clean_issue = None
+    if issue:
+        clean_issue = issue.replace("ISSUE-", "").replace("#", "")
+        
+    projects_list = list(project) if project else None
+
+    # Fetch with filters applied
+    entries = collect_checkpoints(
+        config=cfg,
+        since=since,
+        until=until,
+        projects=projects_list,
+        issue=clean_issue,
+        per_project_files=per_project_files
+    )
+    
+    filters = {}
+    if projects_list:
+        filters['project'] = ",".join(projects_list)
+    if clean_issue:
+        filters['issue'] = clean_issue
+    if since:
+        filters['since'] = since
+    if until:
+        filters['until'] = until
+
+    report_content = generate_report(
+        entries=entries,
+        title=title,
+        per_project_files=per_project_files,
+        filters=filters,
+        include_path=include_path,
+        include_evidence=include_evidence,
+        collapse_details=collapse_details
+    )
+    
+    out_path = Path(output_path)
+    if not out_path.parent.exists():
+        click.echo(f"Error: Directory '{out_path.parent}' does not exist.", err=True)
+        sys.exit(1)
+        
+    with open(out_path, "w", encoding="utf-8") as f:
+        f.write(report_content)
+        
+    click.echo(f"Report successfully generated at {out_path}")
 
 def print_json(entries):
     output = {

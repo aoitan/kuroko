@@ -42,7 +42,7 @@ def blockers(ctx, json_output):
     """Show active blockers."""
     from kuroko.constants import BLOCK_IGNORE
     entries = ctx.obj['get_entries']()
-    blockers = [e for e in entries if e['block'] and e['block'].lower() not in BLOCK_IGNORE]
+    blockers = [e for e in entries if e['block'] and e['block'].strip().lower() not in BLOCK_IGNORE]
     
     if json_output:
         print_json(blockers)
@@ -73,7 +73,7 @@ def status(ctx, json_output):
             print(f"{e['project']}: {e['date']} {e['time']} [{e['phase']}] {e['act']}")
 
 @main.command()
-@click.argument('output_path', type=click.Path())
+@click.argument('output_path', type=click.Path(dir_okay=False))
 @click.option('--per-project-files', type=int, default=None, help='Max number of checkpoint files read per project.')
 @click.option('--since', help='Include entries on/after the date (YYYY-MM-DD).')
 @click.option('--until', help='Include entries on/before the date (YYYY-MM-DD).')
@@ -89,15 +89,17 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
     cfg = ctx.obj['config']
     
     def validate_date(date_str, param_name):
-        if date_str:
-            try:
-                datetime.strptime(date_str, "%Y-%m-%d")
-            except ValueError:
-                click.echo(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.", err=True)
-                sys.exit(1)
+        if not date_str:
+            return None
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            click.echo(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.", err=True)
+            sys.exit(1)
                 
-    validate_date(since, '--since')
-    validate_date(until, '--until')
+    since = validate_date(since, '--since')
+    until = validate_date(until, '--until')
     
     clean_issue = None
     if issue:

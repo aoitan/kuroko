@@ -42,28 +42,28 @@ def generate_report(
     lines.append(f"- filters: {filters_str}")
     lines.append("")
     
-    if not entries:
-        lines.append("No entries found.")
-        return "\n".join(lines)
-        
     # 2) Status
     lines.append("## Status")
-    lines.append("| date | time | phase | project | issue | act |")
-    lines.append("|---|---:|---|---|---:|---|")
-    
-    latest_by_proj = {}
-    for e in entries:
-        if e['project'] not in latest_by_proj:
-            latest_by_proj[e['project']] = e
-            
-    # Sort projects for stability
-    for proj in sorted(latest_by_proj.keys()):
-        e = latest_by_proj[proj]
-        issue_str = f"#{e['issue']}" if e.get('issue') else "-"
-        phase_str = _shorten_phase(e['phase'])
-        act_str = e['act'].replace('|', '&#124;')
-        lines.append(f"| {e['date']} | {e['time']} | {phase_str} | {e['project']} | {issue_str} | {act_str} |")
-    lines.append("")
+    if not entries:
+        lines.append("No entries found.")
+        lines.append("")
+    else:
+        lines.append("| date | time | phase | project | issue | act |")
+        lines.append("|---|---:|---|---|---:|---|")
+        
+        latest_by_proj = {}
+        for e in entries:
+            if e['project'] not in latest_by_proj:
+                latest_by_proj[e['project']] = e
+                
+        # Sort projects for stability
+        for proj in sorted(latest_by_proj.keys()):
+            e = latest_by_proj[proj]
+            issue_str = f"#{e['issue']}" if e.get('issue') else "-"
+            phase_str = _shorten_phase(e['phase'])
+            act_str = e['act'].replace('|', '&#124;')
+            lines.append(f"| {e['date']} | {e['time']} | {phase_str} | {e['project']} | {issue_str} | {act_str} |")
+        lines.append("")
     
     # 3) Blockers
     lines.append("## Blockers")
@@ -72,11 +72,13 @@ def generate_report(
     
     if not blockers:
         lines.append("No active blockers.")
+        lines.append("")
     else:
         for e in blockers:
             issue_str = f"#{e['issue']}" if e.get('issue') else "misc"
             phase_str = _shorten_phase(e['phase'])
-            headline = f"- **[{e['project']} {issue_str} | {e['date']} {e['time']} | {phase_str}] {e['block']}**"
+            block_text = e['block'].replace('\n', ' ')
+            headline = f"- **[{e['project']} {issue_str} | {e['date']} {e['time']} | {phase_str}] {block_text}**"
             lines.append(headline)
             
             details = []
@@ -100,25 +102,33 @@ def generate_report(
             
     # 4) Recent
     lines.append("## Recent")
-    by_date = defaultdict(list)
-    for e in entries:
-        by_date[e['date']].append(e)
-        
-    for date in sorted(by_date.keys(), reverse=True):
-        lines.append(f"### {date}")
-        day_entries = sorted(by_date[date], key=lambda x: x["time"], reverse=True)
-        for e in day_entries:
-            issue_str = f"#{e['issue']}" if e.get('issue') else "-"
-            phase_str = _shorten_phase(e['phase'])
-            lines.append(f"- {e['time']} {phase_str} {e['project']} {issue_str} {e['act']}")
+    if not entries:
+        lines.append("No entries found.")
         lines.append("")
+    else:
+        by_date = defaultdict(list)
+        for e in entries:
+            by_date[e['date']].append(e)
+            
+        for date in sorted(by_date.keys(), reverse=True):
+            lines.append(f"### {date}")
+            day_entries = sorted(by_date[date], key=lambda x: x["time"], reverse=True)
+            for e in day_entries:
+                issue_str = f"#{e['issue']}" if e.get('issue') else "-"
+                phase_str = _shorten_phase(e['phase'])
+                lines.append(f"- {e['time']} {phase_str} {e['project']} {issue_str} {e['act']}")
+            lines.append("")
         
     # 5) Sources
     if include_path:
         lines.append("## Sources")
-        unique_paths = sorted(list({e['file_path'] for e in entries if e.get('file_path')}))
-        for p in unique_paths:
-            lines.append(f"- {p}")
-        lines.append("")
+        if not entries:
+            lines.append("No entries found.")
+            lines.append("")
+        else:
+            unique_paths = sorted(list({e['file_path'] for e in entries if e.get('file_path')}))
+            for p in unique_paths:
+                lines.append(f"- {p}")
+            lines.append("")
 
     return "\n".join(lines)

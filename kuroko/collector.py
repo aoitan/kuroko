@@ -16,6 +16,22 @@ def collect_checkpoints(
 ) -> List[Dict]:
     all_entries = []
     
+    def normalize_date(date_str: Optional[str]) -> Optional[str]:
+        if not date_str:
+            return None
+        try:
+            # Supports slightly different formats and normalizes to YYYY-MM-DD
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            return dt.strftime("%Y-%m-%d")
+        except ValueError:
+            # If it's already in some other format, we might want to fail or just return as is
+            # For now, we return as is to maintain string comparison if possible, 
+            # but ideally callers should pass valid dates.
+            return date_str
+
+    norm_since = normalize_date(since)
+    norm_until = normalize_date(until)
+    
     max_files = per_project_files if per_project_files is not None else config.defaults.per_project_files
     
     for project in config.projects:
@@ -51,9 +67,9 @@ def collect_checkpoints(
                 f_issue_info = meta_match.group(3)
                 f_issue = f_issue_info.replace("ISSUE-", "") if "ISSUE-" in f_issue_info else None
                 
-                if since and f_date < since:
+                if norm_since and f_date < norm_since:
                     continue
-                if until and f_date > until:
+                if norm_until and f_date > norm_until:
                     continue
                 if issue and f_issue != str(issue):
                     continue
@@ -88,9 +104,9 @@ def collect_checkpoints(
                         "file_path": str(path_obj)
                     })
                     
-                    if since and entry["date"] < since:
+                    if norm_since and entry["date"] < norm_since:
                         continue
-                    if until and entry["date"] > until:
+                    if norm_until and entry["date"] > norm_until:
                         continue
                     if issue and entry["issue"] != str(issue):
                         continue

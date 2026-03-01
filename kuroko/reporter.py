@@ -1,0 +1,134 @@
+from typing import List, Dict, Any
+from datetime import datetime
+from collections import defaultdict
+
+PHASE_MAP = {
+    "planning": "plan",
+    "coding": "code",
+    "review": "rev",
+    "fix": "fix",
+    "closing": "done"
+}
+
+def _shorten_phase(phase: str) -> str:
+    if not phase:
+        return ""
+    return PHASE_MAP.get(phase.lower(), phase)
+
+def generate_report(
+    entries: List[Dict[str, Any]],
+    title: str = "Kuroko Report",
+    generated_at: datetime = None,
+    per_project_files: int = 5,
+    filters: Dict[str, str] = None,
+    include_path: bool = False,
+    include_evidence: bool = True,
+    collapse_details: bool = True
+) -> str:
+    if generated_at is None:
+        generated_at = datetime.now()
+        
+    filters_str = ", ".join(f"{k}={v}" for k, v in (filters or {}).items() if v)
+    if not filters_str:
+        filters_str = "none"
+
+    lines = []
+    
+    # 1) Header
+    lines.append(f"# {title}")
+    lines.append("")
+    lines.append(f"- generated_at: {generated_at.isoformat()}")
+    lines.append(f"- per_project_files: {per_project_files}")
+    lines.append(f"- filters: {filters_str}")
+    lines.append("")
+    
+    # 2) Status
+    lines.append("## Status")
+    if not entries:
+        lines.append("No entries found.")
+        lines.append("")
+    else:
+        lines.append("| date | time | phase | project | issue | act |")
+        lines.append("|---|---:|---|---|---:|---|")
+        
+        latest_by_proj = {}
+        for e in entries:
+            if e['project'] not in latest_by_proj:
+                latest_by_proj[e['project']] = e
+                
+        # Sort projects for stability
+        for proj in sorted(latest_by_proj.keys()):
+            e = latest_by_proj[proj]
+            issue_str = f"#{e['issue']}" if e.get('issue') else "-"
+            phase_str = _shorten_phase(e['phase'])
+            act_str = e['act'].replace('|', '&#124;')
+            lines.append(f"| {e['date']} | {e['time']} | {phase_str} | {e['project']} | {issue_str} | {act_str} |")
+        lines.append("")
+    
+    # 3) Blockers
+    lines.append("## Blockers")
+    from kuroko.constants import BLOCK_IGNORE
+    blockers = [e for e in entries if e.get('block') and e['block'].strip().lower() not in BLOCK_IGNORE]
+    
+    if not blockers:
+        lines.append("No active blockers.")
+        lines.append("")
+    else:
+        for e in blockers:
+            issue_str = f"#{e['issue']}" if e.get('issue') else "misc"
+            phase_str = _shorten_phase(e['phase'])
+            block_text = e['block'].replace('\n', ' ')
+            headline = f"- **[{e['project']} {issue_str} | {e['date']} {e['time']} | {phase_str}] {block_text}**"
+            lines.append(headline)
+            
+            details = []
+            details.append(f"  - act: {e['act']}")
+            if include_evidence and e.get('evd'):
+                details.append("  - evd:")
+                details.append("    ```")
+                for line in e['evd'].split('\n'):
+                    details.append(f"    {line}")
+                details.append("    ```")
+            if include_path and e.get('file_path'):
+                details.append(f"  - file_path: `{e['file_path']}`")
+                
+            if collapse_details:
+                lines.append("  <details><summary>details</summary>\n")
+                lines.extend(details)
+                lines.append("\n  </details>")
+            else:
+                lines.extend(details)
+            lines.append("")
+            
+    # 4) Recent
+    lines.append("## Recent")
+    if not entries:
+        lines.append("No entries found.")
+        lines.append("")
+    else:
+        by_date = defaultdict(list)
+        for e in entries:
+            by_date[e['date']].append(e)
+            
+        for date in sorted(by_date.keys(), reverse=True):
+            lines.append(f"### {date}")
+            day_entries = sorted(by_date[date], key=lambda x: x["time"], reverse=True)
+            for e in day_entries:
+                issue_str = f"#{e['issue']}" if e.get('issue') else "-"
+                phase_str = _shorten_phase(e['phase'])
+                lines.append(f"- {e['time']} {phase_str} {e['project']} {issue_str} {e['act']}")
+            lines.append("")
+        
+    # 5) Sources
+    if include_path:
+        lines.append("## Sources")
+        if not entries:
+            lines.append("No entries found.")
+            lines.append("")
+        else:
+            unique_paths = sorted(list({e['file_path'] for e in entries if e.get('file_path')}))
+            for p in unique_paths:
+                lines.append(f"- {p}")
+            lines.append("")
+
+    return "\n".join(lines)

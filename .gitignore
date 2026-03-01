@@ -10,3 +10,4 @@ kuroko.config.yaml
 # Ignore all markdown files in checkpoint, but keep the directory
 checkpoint/*.md
 !checkpoint/.gitkeep
+test_report.md

@@ -91,12 +91,11 @@ def generate_report(
             details.append(f"  - act: {act_detail}")
             if include_evidence and entry.get('evd'):
                 details.append("  - evd:")
-                details.append("    ```")
-                # Prevent escaping the code block itself
-                evd_safe = entry['evd'].replace('```', '\\`\\`\\` ')
-                for line in evd_safe.split('\n'):
+                details.append("    ~~~~")
+                # Use tildes for outer fence to allow triple backticks inside without escaping issues
+                for line in entry['evd'].split('\n'):
                     details.append(f"    {line}")
-                details.append("    ```")
+                details.append("    ~~~~")
             if include_path and entry.get('file_path'):
                 details.append(f"  - file_path: `{entry['file_path']}`")
 
@@ -140,7 +139,7 @@ def generate_report(
         else:
             unique_paths = sorted(list({entry['file_path'] for entry in entries if entry.get('file_path')}))
             for path in unique_paths:
-                lines.append(f"- `{html.escape(path)}`")
+                lines.append(f"- `{path}`")
             lines.append("")
 
     return "\n".join(lines)

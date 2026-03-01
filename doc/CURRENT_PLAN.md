@@ -1,52 +1,46 @@
-# Implementation Plan: kuroko report command
+# Implementation Plan: `kuroko worklist` Subcommand
 
 ## 1. 概要とゴール (Summary & Goal)
-収集したチェックポイントから、人間が読みやすい Markdown 形式のレポートを生成する `report` コマンドを追加します。
+GitHub リポジトリから Open な PR と Issue を取得し、プロジェクトごとに一覧表示するサブコマンド `kuroko worklist` を追加する。
 
-- **Must**: 
-    - 指定されたパスへの Markdown ファイル出力。
-    - ステータス、ブロッカー、最近の活動の3セクションを含むレポート構成。
-    - フィルタリング（日付、プロジェクト、Issue）機能の実装。
-    - 折りたたみセクション（`<details>`）やテーブルを用いた整形。
+- **Must**:
+  - `kuroko.config.yaml` への `repo` フィールド（owner/repo 形式）の追加。
+  - `gh` コマンドを使用した PR/Issue データの取得。
+  - Markdown テーブル形式での標準出力。
+  - `--json-output` オプションによる JSON 形式での出力。
 - **Want**:
-    - 出力ファイルが既に存在する場合の `--overwrite` / `--no-overwrite` 制御（今回はデフォルト上書きとする）。
+  - `gh` コマンドがインストールされていない場合の適切なエラーメッセージ。
+  - Stale アイテム（最終更新から 7 日以上経過）のハイライトまたは統計。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- **`kuroko/collector.py` の拡張**: フィルタリングロジックの追加（since, until, project, issue）。
-- **`kuroko/reporter.py` の新規作成**: Markdown レポートの生成ロジック。
-- **`kuroko/cli.py` への `report` コマンド追加**: 各種オプション（--since, --include-path等）の実装。
-- **検証用テスト**: フィルタリングとレポート生成の単体テスト。
+- `kuroko/config.py`: `ProjectConfig` クラスへの `repo: Optional[str] = None` フィールドの追加。
+- `kuroko/worklist.py` (新規): `gh` コマンド呼び出しとデータ構造化ロジックの追加。
+- `kuroko/cli.py`: `worklist` サブコマンドの実装と `main` への登録。
+- 出力フォーマットの実装（Markdown / JSON）。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
-- **リファクタリング**: 既存の `recent`, `status` コマンドの出力形式の変更。
-- **外部連携**: Slack や GitHub への自動投稿。
-- **LLM 要約**: レポート内での LLM による自動要約（将来の拡張とする）。
+- GitHub 以外のプラットフォーム（GitLab, Bitbucket 等）への対応。
+- `gh` コマンド以外の方法（直接 API を叩く等）によるデータ取得。
+- PR/Issue の詳細なフィルタリング機能（サブコマンドのオプションとして複雑なクエリを渡すなど）。
 
 ## 3. 実装ステップ (Implementation Steps)
-
-1. [ ] **Step 1: collector の機能強化**
-    - *Action*: `kuroko/collector.py` の `collect_checkpoints` を拡張し、引数で `since`, `until`, `projects` (list), `issue`, `per_project_files` を受け取り、フィルタリングするように修正。
-    - *Validation*: `tests/test_collector.py` を作成し、日付やプロジェクトによるフィルタが正しく機能することを確認。
-
-2. [ ] **Step 2: reporter モジュールの作成**
-    - *Action*: `kuroko/reporter.py` を作成。`doc/second_idea.md` の仕様（Header, Status Table, Blockers List, Recent Section）に沿った Markdown 文字列を生成する関数を実装。
-    - *Validation*: `tests/test_reporter.py` を作成し、サンプルエントリから期待通りの Markdown が生成されるか確認。
-
-3. [ ] **Step 3: CLI コマンドの実装**
-    - *Action*: `kuroko/cli.py` に `@main.command() def report` を追加。ファイル出力処理と `reporter.py` の呼び出しを実装。
-    - *Validation*: `kuroko report output.md` を実行し、ファイルが生成されることを確認。
-
-4. [ ] **Step 4: ドキュメント更新**
-    - *Action*: `README.md` に `report` コマンドの使い方を追記。
+1. [ ] **Step 1: 設定ファイルの拡張**
+   - *Action*: `kuroko/config.py` の `ProjectConfig` に `repo` フィールドを追加。
+2. [ ] **Step 2: データ取得ロジックの実装**
+   - *Action*: `kuroko/worklist.py` を新規作成。`subprocess` を介して `gh pr list` および `gh issue list` を実行し、指定された項目（ID, タイトル, 更新日時等）をパースする関数を作成。
+   - *Validation*: ダミーのリポジトリ設定を用いて、正しくリストが取得・パースされるかテスト。
+3. [ ] **Step 3: CLI サブコマンドの追加**
+   - *Action*: `kuroko/cli.py` に `@main.command()` として `worklist` を追加。取得したデータをプロジェクトごとにループして Markdown テーブルで出力する。
+   - *Validation*: `kuroko worklist` 実行時に Markdown が出力されることを確認。
+4. [ ] **Step 4: JSON 出力対応**
+   - *Action*: `--json-output` フラグがある場合に、パース済みのオブジェクトを JSON 形式で print する。
 
 ## 4. 検証プラン (Verification Plan)
-- **単体テスト**: `pytest tests/test_collector.py tests/test_reporter.py` を実行。
-- **実機確認**: 
-    1. 既存の `checkpoint/` ディレクトリがある状態で `kuroko report test_report.md` を実行。
-    2. 生成された `test_report.md` を VSCode 等で開き、テーブルやリストが正しく表示されるか確認。
-    3. `--since` や `--issue` などのフィルタを適用して、内容が絞り込まれるか確認。
+- `kuroko worklist` を実行し、Markdown 形式でプロジェクト名、統計、PR/Issue リストが表示されること。
+- `kuroko worklist --json-output` を実行し、有効な JSON が出力されること。
+- リポジトリが設定されていないプロジェクトがある場合、スキップされるか適切な警告が出ること。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
-- 既存の `recent`, `status`, `blockers` コマンドが壊れないようにすること（`collector.py` の変更時はデフォルト引数に注意）。
-- `PyYAML` や `click` 以外の新しいライブラリは導入しない。
+- `gh` コマンドへの依存を最小限にし、コマンドの実行失敗時（未ログイン等）にクラッシュしないようエラーハンドリングを徹底すること。
+- 既存の `kuroko status` や `recent` のコードスタイルに合わせること。

@@ -3,10 +3,7 @@ from datetime import datetime
 from kuroko.collector import collect_checkpoints
 from kuroko.config import KurokoConfig, ProjectConfig, DefaultsConfig
 
-# モックのためのダミーエントリを用意したいが、
-# collect_checkpoints は直接ファイルシステムを読む。
 # tmp_path フィクスチャを使ってテスト用ディレクトリを作る。
-
 @pytest.fixture
 def dummy_workspace(tmp_path):
     # プロジェクトA
@@ -51,6 +48,7 @@ def dummy_workspace(tmp_path):
     )
     return cfg
 
+
 def test_collector_no_filter(dummy_workspace):
     entries = collect_checkpoints(dummy_workspace)
     assert len(entries) == 3
@@ -59,20 +57,24 @@ def test_collector_no_filter(dummy_workspace):
     assert entries[1]["date"] == "2026-02-28"
     assert entries[2]["date"] == "2026-02-25"
 
+
 def test_collector_filter_since(dummy_workspace):
     entries = collect_checkpoints(dummy_workspace, since="2026-02-28")
     assert len(entries) == 2
     assert all(e["date"] >= "2026-02-28" for e in entries)
+
 
 def test_collector_filter_until(dummy_workspace):
     entries = collect_checkpoints(dummy_workspace, until="2026-02-28")
     assert len(entries) == 2
     assert all(e["date"] <= "2026-02-28" for e in entries)
 
+
 def test_collector_filter_projects(dummy_workspace):
     entries = collect_checkpoints(dummy_workspace, projects=["project_b"])
     assert len(entries) == 1
     assert entries[0]["project"] == "project_b"
+
 
 def test_collector_filter_issue(dummy_workspace):
     entries = collect_checkpoints(dummy_workspace, issue="1")

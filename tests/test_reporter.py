@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime
 from kuroko.reporter import generate_report
 
+
 @pytest.fixture
 def dummy_entries():
     return [
@@ -29,6 +30,7 @@ def dummy_entries():
         }
     ]
 
+
 def test_generate_report(dummy_entries):
     report = generate_report(
         entries=dummy_entries,
@@ -53,7 +55,7 @@ def test_generate_report(dummy_entries):
     
     # Blocker list
     assert "依存関係の解決に少し手間取った" in report
-    assert "<details><summary>details</summary>" in report
+    assert "<details markdown=\"1\"><summary>details</summary>" in report
     
     # Recent list
     assert "- 17:00 done kuroko - READMEへの案内を追加" in report

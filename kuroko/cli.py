@@ -87,7 +87,7 @@ def status(ctx, json_output):
 def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, collapse_details, title):
     """Generate a human-readable Markdown report."""
     cfg = ctx.obj['config']
-    
+
     def validate_date(date_str, param_name):
         if not date_str:
             return None
@@ -95,18 +95,16 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             return dt.strftime("%Y-%m-%d")
         except ValueError:
-            click.echo(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.", err=True)
-            sys.exit(1)
-                
+            raise click.ClickException(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.")
+
     since = validate_date(since, '--since')
     until = validate_date(until, '--until')
-    
+
     clean_issue = None
     if issue:
         clean_issue = issue.replace("ISSUE-", "").replace("#", "")
-        
+
     projects_list = list(project) if project else None
-    
     actual_per_project = per_project_files if per_project_files is not None else cfg.defaults.per_project_files
 
     entries = collect_checkpoints(
@@ -117,7 +115,7 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
         issue=clean_issue,
         per_project_files=actual_per_project
     )
-    
+
     filters = {}
     if projects_list:
         filters['project'] = ",".join(projects_list)
@@ -137,15 +135,14 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
         include_evidence=include_evidence,
         collapse_details=collapse_details
     )
-    
+
     out_path = Path(output_path)
-    if out_path.parent and out_path.parent != Path(".") and not out_path.parent.exists():
-        click.echo(f"Error: Directory '{out_path.parent}' does not exist.", err=True)
-        sys.exit(1)
-        
+    if out_path.parent != Path(".") and not out_path.parent.exists():
+        raise click.ClickException(f"Error: Directory '{out_path.parent}' does not exist.")
+
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(report_content)
-        
+
     click.echo(f"Report successfully generated at {out_path}")
 
 def print_json(entries):

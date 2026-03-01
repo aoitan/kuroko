@@ -36,7 +36,8 @@ class ReusableTCPServer(socketserver.TCPServer):
 
 
 def render_markdown_to_html(markdown_text: str) -> str:
-    content_raw = markdown(markdown_text, extensions=["extra"])
+    # md_in_html is required to parse Markdown inside <details> tags
+    content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     
     # Sanitize HTML after rendering from Markdown to prevent XSS (e.g., javascript: links)
     # Allow safe tags for report visualization.
@@ -79,7 +80,8 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
     if refresh:
         refresh_report(report_path=report_path, kuroko_cmd=kuroko_cmd, report_args=report_args)
 
-    if not report_path.exists() and not refresh:
+    # Always check existence even after refresh
+    if not report_path.exists():
         raise click.ClickException(
             f"report file not found: {report_path} (run `kuroko report {report_path}` first, or use --refresh)"
         )
@@ -94,10 +96,11 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.end_headers()
                 self.wfile.write(html.encode('utf-8'))
-            except Exception as e:
+            except Exception:
                 self.send_response(500)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(f"Error reading report: {e}".encode('utf-8'))
+                self.wfile.write(b"Error reading or rendering report.")
 
         def log_message(self, format, *args):
             return

@@ -102,9 +102,11 @@ def generate_report(
 
             if collapse_details:
                 # markdown="1" is needed for Python-Markdown to parse content inside raw HTML blocks
-                lines.append("  <details markdown=\"1\"><summary>details</summary>\n")
+                lines.append("  <details markdown=\"1\"><summary>details</summary>")
+                lines.append("")
                 lines.extend(details)
-                lines.append("\n  </details>")
+                lines.append("")
+                lines.append("  </details>")
             else:
                 lines.extend(details)
             lines.append("")
@@ -138,7 +140,7 @@ def generate_report(
         else:
             unique_paths = sorted(list({entry['file_path'] for entry in entries if entry.get('file_path')}))
             for path in unique_paths:
-                lines.append(f"- {path}")
+                lines.append(f"- `{html.escape(path)}`")
             lines.append("")
 
     return "\n".join(lines)

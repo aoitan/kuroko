@@ -95,8 +95,7 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             return dt.strftime("%Y-%m-%d")
         except ValueError:
-            click.echo(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.", err=True)
-            sys.exit(1)
+            raise click.ClickException(f"Error: Invalid date format for {param_name}. Must be YYYY-MM-DD.")
 
     since = validate_date(since, '--since')
     until = validate_date(until, '--until')
@@ -139,8 +138,7 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
 
     out_path = Path(output_path)
     if out_path.parent != Path(".") and not out_path.parent.exists():
-        click.echo(f"Error: Directory '{out_path.parent}' does not exist.", err=True)
-        sys.exit(1)
+        raise click.ClickException(f"Error: Directory '{out_path.parent}' does not exist.")
 
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(report_content)

@@ -70,6 +70,21 @@ kuroko blockers
 # 各プロジェクトの最新ステータスを表示
 kuroko status
 
+# 人間が読みやすいMarkdownレポートを生成
+kuroko report report.md
+
+# レポート生成のオプション例（特定のプロジェクトやIssueで絞り込み）
+kuroko report report.md --project my-project --issue 123 --since 2026-02-01
+
+# 既存のMarkdownレポートをWeb UI表示（Ctrl+Cで停止）
+kanpe --input-file report.md
+
+# レポートを再生成してから表示
+kanpe --input-file report.md --refresh
+
+# 再生成時にkuroko reportへ追加オプションを渡す
+kanpe --input-file report.md --refresh --report-args "--project my-project --since 2026-02-01"
+
 # LLM用にJSON形式で出力
 kuroko status --json-output
 ```

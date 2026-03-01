@@ -33,20 +33,21 @@ def generate_report(
     if generated_at is None:
         generated_at = datetime.now()
 
-    # Escape filter names/values just in case
-    filters_str = ", ".join(f"{html.escape(k)}={html.escape(v)}" for k, v in (filters or {}).items() if v)
+    filters_str = ", ".join(f"{k}={v}" for k, v in (filters or {}).items() if v)
     if not filters_str:
         filters_str = "none"
 
     lines = []
 
-    lines.append(f"# {html.escape(title)}")
+    # 1) Header
+    lines.append(f"# {title}")
     lines.append("")
     lines.append(f"- generated_at: {generated_at.isoformat()}")
     lines.append(f"- per_project_files: {per_project_files}")
     lines.append(f"- filters: {filters_str}")
     lines.append("")
 
+    # 2) Status
     lines.append("## Status")
     if not entries:
         lines.append("No entries found.")
@@ -64,11 +65,13 @@ def generate_report(
             entry = latest_by_proj[project]
             issue_str = f"#{entry['issue']}" if entry.get('issue') else "-"
             phase_str = _shorten_phase(entry['phase'])
-            # Escape HTML and | then replace newlines with <br> to avoid breaking the table and XSS
-            act_str = html.escape(entry['act']).replace('|', '&#124;').replace('\n', '<br>')
-            lines.append(f"| {entry['date']} | {entry['time']} | {phase_str} | {html.escape(entry['project'])} | {issue_str} | {act_str} |")
+            # Escape | and replace newlines with <br> to avoid breaking the table
+            # No html.escape here to maintain human readability in Markdown files.
+            act_str = entry['act'].replace('|', '&#124;').replace('\n', '<br>')
+            lines.append(f"| {entry['date']} | {entry['time']} | {phase_str} | {entry['project']} | {issue_str} | {act_str} |")
         lines.append("")
 
+    # 3) Blockers
     lines.append("## Blockers")
     blockers = [e for e in entries if e.get('block') and e['block'].strip().lower() not in BLOCK_IGNORE]
 
@@ -79,20 +82,17 @@ def generate_report(
         for entry in blockers:
             issue_str = f"#{entry['issue']}" if entry.get('issue') else "misc"
             phase_str = _shorten_phase(entry['phase'])
-            # Escape for safety
-            block_text = html.escape(entry['block']).replace('\n', ' ')
-            headline = f"- **[{html.escape(entry['project'])} {issue_str} | {entry['date']} {entry['time']} | {phase_str}] {block_text}**"
+            block_text = entry['block'].replace('\n', ' ')
+            headline = f"- **[{entry['project']} {issue_str} | {entry['date']} {entry['time']} | {phase_str}] {block_text}**"
             lines.append(headline)
 
             details = []
-            # Also escape newlines in act for consistency in details list
-            act_detail = html.escape(entry['act']).replace('\n', ' ')
+            act_detail = entry['act'].replace('\n', ' ')
             details.append(f"  - act: {act_detail}")
             if include_evidence and entry.get('evd'):
                 details.append("  - evd:")
                 details.append("    ```")
-                # Do NOT html.escape here to avoid double escaping in code block.
-                # Just prevent escaping the code block itself.
+                # Prevent escaping the code block itself
                 evd_safe = entry['evd'].replace('```', '\\`\\`\\` ')
                 for line in evd_safe.split('\n'):
                     details.append(f"    {line}")
@@ -101,6 +101,7 @@ def generate_report(
                 details.append(f"  - file_path: `{entry['file_path']}`")
 
             if collapse_details:
+                # markdown="1" is needed for Python-Markdown to parse content inside raw HTML blocks
                 lines.append("  <details markdown=\"1\"><summary>details</summary>\n")
                 lines.extend(details)
                 lines.append("\n  </details>")
@@ -108,6 +109,7 @@ def generate_report(
                 lines.extend(details)
             lines.append("")
 
+    # 4) Recent
     lines.append("## Recent")
     if not entries:
         lines.append("No entries found.")
@@ -123,12 +125,11 @@ def generate_report(
             for entry in day_entries:
                 issue_str = f"#{entry['issue']}" if entry.get('issue') else "-"
                 phase_str = _shorten_phase(entry['phase'])
-                # Replace newlines for single-line display
-                act_oneline = html.escape(entry['act']).replace('\n', ' ')
-                lines.append(f"- {entry['time']} {phase_str} {html.escape(entry['project'])} {issue_str} {act_oneline}")
+                act_oneline = entry['act'].replace('\n', ' ')
+                lines.append(f"- {entry['time']} {phase_str} {entry['project']} {issue_str} {act_oneline}")
             lines.append("")
 
-
+    # 5) Sources
     if include_path:
         lines.append("## Sources")
         if not entries:

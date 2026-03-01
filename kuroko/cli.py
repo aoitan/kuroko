@@ -18,6 +18,7 @@ def main(ctx, config):
         click.echo("Warning: No projects defined. Please create kuroko.config.yaml.", err=True)
         
     ctx.obj['config'] = cfg
+    # Lazy evaluation for other commands to prevent double parsing
     ctx.obj['get_entries'] = lambda: collect_checkpoints(cfg)
 
 @main.command()
@@ -62,6 +63,7 @@ def status(ctx, json_output):
     for e in entries:
         if e['project'] not in latest_by_proj:
             latest_by_proj[e['project']] = e
+
             
     entries = list(latest_by_proj.values())
     if json_output:

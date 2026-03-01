@@ -42,16 +42,21 @@ def test_generate_report(dummy_entries):
         include_evidence=True,
         collapse_details=True
     )
-
+    
     assert "# Test Report" in report
     assert "- generated_at: 2026-02-28T15:58:59" in report
     assert "## Status" in report
     assert "## Blockers" in report
     assert "## Recent" in report
     assert "## Sources" in report
-
+    
+    # Status table
     assert "| 2026-02-28 | 17:00 | done | kuroko | - | READMEへの案内を追加 |" in report
+    
+    # Blocker list
     assert "依存関係の解決に少し手間取った" in report
-    assert "<details><summary>details</summary>" in report
+    assert "<details markdown=\"1\"><summary>details</summary>" in report
+    
+    # Recent list
     assert "- 17:00 done kuroko - READMEへの案内を追加" in report
     assert "- 11:30 code kuroko #1 parserとcollectorを実装" in report

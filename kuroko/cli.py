@@ -136,7 +136,7 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
     )
 
     out_path = Path(output_path)
-    if out_path.parent and out_path.parent != Path(".") and not out_path.parent.exists():
+    if out_path.parent != Path(".") and not out_path.parent.exists():
         click.echo(f"Error: Directory '{out_path.parent}' does not exist.", err=True)
         sys.exit(1)
 

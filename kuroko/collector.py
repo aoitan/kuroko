@@ -47,7 +47,10 @@ def collect_checkpoints(
             if meta_match:
                 f_date = meta_match.group(1)
                 f_issue_info = meta_match.group(3)
-                f_issue = f_issue_info.replace("ISSUE-", "") if "ISSUE-" in f_issue_info else None
+                
+                # Precise extraction: ISSUE-123-something -> 123
+                f_issue_match = re.search(r'ISSUE-(\d+)', f_issue_info)
+                f_issue = f_issue_match.group(1) if f_issue_match else None
 
                 if since and f_date < since:
                     continue
@@ -55,10 +58,24 @@ def collect_checkpoints(
                     continue
                 if issue and f_issue != str(issue):
                     continue
+                
+                filtered_files.append(file_path)
+            elif not issue:
+                # Fallback for non-matching files (only if not filtering by issue)
+                filtered_files.append(file_path)
             
-            filtered_files.append(file_path)
-            
-        filtered_files.sort(key=lambda x: x.name, reverse=True)
+        # Sort by (date_from_filename or mtime, filename) to get latest files first
+        def sort_key(path: Path):
+            name = path.name
+            match = re.match(r'(\d{4}-\d{2}-\d{2})', name)
+            if match:
+                # Use filename date as high priority, but combine with mtime for precision
+                return (match.group(1), path.stat().st_mtime, name)
+            # Use mtime for both date and precision for non-matching files
+            mtime = path.stat().st_mtime
+            return (datetime.fromtimestamp(mtime).strftime('%Y-%m-%d'), mtime, name)
+
+        filtered_files.sort(key=sort_key, reverse=True)
         filtered_files = filtered_files[:max_files]
         
         for path_obj in filtered_files:
@@ -68,7 +85,10 @@ def collect_checkpoints(
                 date_str = meta_match.group(1)
                 proj_name = meta_match.group(2)
                 issue_info = meta_match.group(3)
-                issue_id = issue_info.replace("ISSUE-", "") if "ISSUE-" in issue_info else None
+                
+                # Precise extraction: ISSUE-123-something -> 123
+                issue_match = re.search(r'ISSUE-(\d+)', issue_info)
+                issue_id = issue_match.group(1) if issue_match else None
             else:
                 date_str = datetime.fromtimestamp(path_obj.stat().st_mtime).strftime('%Y-%m-%d')
                 proj_name = project.name

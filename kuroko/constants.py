@@ -1,1 +1,1 @@
-BLOCK_IGNORE = ["なし", "none", "n/a", "na", "-", "nothing"]
+BLOCK_IGNORE = ["なし", "none", "n/a", "-", "nothing"]

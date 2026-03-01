@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import click
+import bleach
 from markdown import markdown
 
 
@@ -16,11 +17,11 @@ HTML_TEMPLATE = """<!doctype html>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>kanpe report</title>
     <style>
-      body { max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; }
-      pre { overflow-x: auto; }
-      code { white-space: pre-wrap; }
-      table { border-collapse: collapse; }
-      th, td { padding: 0.4rem 0.6rem; }
+      body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; }}
+      pre {{ overflow-x: auto; }}
+      code {{ white-space: pre-wrap; }}
+      table {{ border-collapse: collapse; }}
+      th, td {{ padding: 0.4rem 0.6rem; border: 1px solid #ccc; }}
     </style>
   </head>
   <body>
@@ -35,14 +36,28 @@ class ReusableTCPServer(socketserver.TCPServer):
 
 
 def render_markdown_to_html(markdown_text: str) -> str:
-    content = markdown(markdown_text, extensions=["extra", "fenced_code", "tables"])
+    content_raw = markdown(markdown_text, extensions=["extra"])
+    
+    # Sanitize HTML after rendering from Markdown to prevent XSS (e.g., javascript: links)
+    # Allow safe tags for report visualization.
+    allowed_tags = list(bleach.ALLOWED_TAGS) + [
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
+        'p', 'br', 'hr', 'pre', 'code', 
+        'table', 'thead', 'tbody', 'tr', 'th', 'td',
+        'details', 'summary'
+    ]
+    allowed_attrs = bleach.ALLOWED_ATTRIBUTES.copy()
+    allowed_attrs['a'] = ['href', 'title']
+    
+    content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs)
     return HTML_TEMPLATE.format(content=content)
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None:
     args = [kuroko_cmd, "report", str(report_path)]
     if report_args:
-        args.extend(shlex.split(report_args))
+        import sys
+        args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
 
     result = subprocess.run(args, capture_output=True, text=True)
     if result.returncode != 0:
@@ -64,22 +79,25 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
     if refresh:
         refresh_report(report_path=report_path, kuroko_cmd=kuroko_cmd, report_args=report_args)
 
-    if not report_path.exists():
+    if not report_path.exists() and not refresh:
         raise click.ClickException(
             f"report file not found: {report_path} (run `kuroko report {report_path}` first, or use --refresh)"
         )
 
-    with open(report_path, 'r', encoding='utf-8') as f:
-        markdown_text = f.read()
-
-    html = render_markdown_to_html(markdown_text)
-
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(html.encode('utf-8'))
+            try:
+                with open(report_path, 'r', encoding='utf-8') as f:
+                    markdown_text = f.read()
+                html = render_markdown_to_html(markdown_text)
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(html.encode('utf-8'))
+            except Exception as e:
+                self.send_response(500)
+                self.end_headers()
+                self.wfile.write(f"Error reading report: {e}".encode('utf-8'))
 
         def log_message(self, format, *args):
             return

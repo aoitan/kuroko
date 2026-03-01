@@ -5,12 +5,16 @@ description = "A CLI tool to collect and visualize LLM agent checkpoints (kuroko
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "bleach>=6.0",
     "click>=8.0",
     "Markdown>=3.6",
     "PyYAML>=6.0",
     "pydantic>=2.0",
     "pytest>=7.0",
 ]
+
+[tool.setuptools]
+packages = ["kuroko", "kanpe"]
 
 [project.scripts]
 kuroko = "kuroko.cli:main"

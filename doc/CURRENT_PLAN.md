@@ -31,11 +31,11 @@
 2. [ ] **Step 2: `kuroko report` の強化**
    - *Action*: `kuroko/cli.py` の `report` コマンドで `--include-worklist` フラグを処理し、各プロジェクトのリポジトリからデータを取得して Reporter に渡す。
    - *Validation*: `kuroko report --include-worklist output.md` で Worklist を含むレポートが生成されることを確認。
-3. [ ] **Step 4: `kanpe` UI へのボタン追加**
-   - *Action*: `kanpe/cli.py` の `HTML_TEMPLATE` を修正し、右上に「Refresh & Reload」ボタンを配置。
-4. [ ] **Step 5: サーバー側リフレッシュ処理の実装**
-   - *Action*: `kanpe/cli.py` の `Handler` で `/refresh` への GET リクエストをハンドリング。`refresh_report` を実行後、トップページへリダイレクト。
-   - *Validation*: UI のボタン押下によりレポートが再生成され、画面が更新されることを確認。
+4. [ ] **Step 4: `kanpe` UI へのボタン追加**
+   - *Action*: `kanpe/cli.py` の `HTML_TEMPLATE` を修正し、右上に POST 送信用の「Refresh & Reload」ボタンを配置。CSRF 対策のための nonce を含める。
+5. [ ] **Step 5: サーバー側リフレッシュ処理の実装**
+   - *Action*: `kanpe/cli.py` の `Handler` で `/refresh` への **POST リクエストのみ**を受け付けるエンドポイントを実装。nonce を検証した上で `refresh_report` を実行後、303 リダイレクトでトップページへ戻す。
+   - *Validation*: UI のボタン押下によりレポートが再生成され、画面が更新されることを確認。GET リクエストが拒否されることを確認。
 
 ## 4. 検証プラン (Verification Plan)
 - `kuroko report --include-worklist` で生成された Markdown ファイルを直接確認。

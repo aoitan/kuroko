@@ -1,4 +1,3 @@
-import pytest
 from kuroko.reporter import generate_report
 
 def test_generate_report_with_worklist():
@@ -48,7 +47,7 @@ projects:
             "issues": []
         }
         runner = CliRunner()
-        # Should fail because --include-worklist is not implemented yet
+        # Should succeed and include a worklist section since --include-worklist is implemented
         result = runner.invoke(main, ["--config", str(config_file), "report", str(output_md), "--include-worklist"])
         assert result.exit_code == 0
         assert "## Worklist" in output_md.read_text()

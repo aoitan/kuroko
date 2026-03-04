@@ -135,8 +135,13 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                 content_length = int(self.headers.get('Content-Length', 0))
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 
-                # Simple nonce check to prevent CSRF
-                if f"nonce={current_nonce}" in post_data:
+                from urllib.parse import parse_qs
+                import hmac
+                params = parse_qs(post_data)
+                nonce_in_post = params.get("nonce", [None])[0]
+
+                # Secure nonce check to prevent CSRF
+                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
                     try:
                         refresh_report(
                             report_path=report_path,

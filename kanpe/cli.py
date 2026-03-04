@@ -61,10 +61,10 @@ def render_markdown_to_html(markdown_text: str) -> str:
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None:
-    args = shlex.split(kuroko_cmd)
+    import sys
+    args = shlex.split(kuroko_cmd, posix=(sys.platform != "win32"))
     args.extend(["report", str(report_path)])
     if report_args:
-        import sys
         args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
 
     result = subprocess.run(args, capture_output=True, text=True)
@@ -103,13 +103,13 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.end_headers()
                 self.wfile.write(html.encode('utf-8'))
-            except Exception as exc:
+            except Exception:
                 import traceback
                 traceback.print_exc()
                 self.send_response(500)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()
-                self.wfile.write(f"Error reading or rendering report: {exc}".encode('utf-8'))
+                self.wfile.write(b"Error reading or rendering report.")
 
         def log_message(self, format, *args):
             return

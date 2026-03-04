@@ -1,4 +1,3 @@
-import html
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import defaultdict

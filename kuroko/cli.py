@@ -113,7 +113,9 @@ def worklist(ctx, n, json_output):
                 click.echo("|---|---|---|---|")
                 for pr in res["pull_requests"]:
                     labels_str = ", ".join(pr['labels']) if pr['labels'] else "-"
-                    title_link = f"[{pr['title']}]({pr['url']})"
+                    labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                    title_safe = pr['title'].replace('|', '&#124;').replace('\n', ' ')
+                    title_link = f"[{title_safe}]({pr['url']})"
                     click.echo(f"| #{pr['id']} | {title_link} | {labels_str} | {pr['updated_at']} |")
             
             click.echo("\n### Open Issues")
@@ -124,7 +126,9 @@ def worklist(ctx, n, json_output):
                 click.echo("|---|---|---|---|")
                 for issue in res["issues"]:
                     labels_str = ", ".join(issue['labels']) if issue['labels'] else "-"
-                    title_link = f"[{issue['title']}]({issue['url']})"
+                    labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                    title_safe = issue['title'].replace('|', '&#124;').replace('\n', ' ')
+                    title_link = f"[{title_safe}]({issue['url']})"
                     click.echo(f"| #{issue['id']} | {title_link} | {labels_str} | {issue['updated_at']} |")
             click.echo("\n" + "-" * 40 + "\n")
 

@@ -1,4 +1,5 @@
 import shlex
+import secrets
 import socketserver
 import subprocess
 import webbrowser
@@ -17,15 +18,28 @@ HTML_TEMPLATE = """<!doctype html>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>kanpe report</title>
     <style>
-      body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; }}
+      body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; position: relative; }}
       pre {{ overflow-x: auto; }}
       code {{ white-space: pre-wrap; }}
       table {{ border-collapse: collapse; }}
       th, td {{ padding: 0.4rem 0.6rem; border: 1px solid #ccc; }}
+      .header-actions {{ position: sticky; top: 0; background: #fff; padding: 1rem 0; border-bottom: 1px solid #eee; margin-bottom: 1rem; display: flex; justify-content: flex-end; z-index: 100; }}
+      .btn {{ padding: 0.5rem 1rem; border: 1px solid #007bff; background: #007bff; color: #fff; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 0.9rem; }}
+      .btn:hover {{ background: #0056b3; }}
+      .btn:active {{ background: #004085; }}
+      .btn.loading {{ opacity: 0.6; pointer-events: none; }}
     </style>
   </head>
   <body>
-    {content}
+    <div class="header-actions">
+      <form action="/refresh" method="post">
+        <input type="hidden" name="nonce" value="{nonce}">
+        <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
+      </form>
+    </div>
+    <div id="report-content">
+      {content}
+    </div>
   </body>
 </html>
 """
@@ -35,7 +49,7 @@ class ReusableTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def render_markdown_to_html(markdown_text: str) -> str:
+def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
     # md_in_html is required to parse Markdown inside <details> tags
     content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     
@@ -57,13 +71,28 @@ def render_markdown_to_html(markdown_text: str) -> str:
     css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
     
     content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
-    return HTML_TEMPLATE.format(content=content)
+    return HTML_TEMPLATE.format(content=content, nonce=nonce)
 
 
-def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None:
+def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
     import sys
+    
+    # Auto-detect if current report has worklist to maintain state on refresh
+    auto_include_worklist = include_worklist
+    if not auto_include_worklist and report_path.exists():
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                if "## Worklist" in f.read():
+                    auto_include_worklist = True
+        except Exception:
+            pass
+
     args = shlex.split(kuroko_cmd, posix=(sys.platform != "win32"))
     args.extend(["report", str(report_path)])
+    
+    if auto_include_worklist:
+        args.append("--include-worklist")
+        
     if report_args:
         args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
 
@@ -77,15 +106,22 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
 @click.option('--report-args', default='', help='Extra args passed to `kuroko report` when --refresh is enabled.')
+@click.option('--include-worklist', is_flag=True, help='Force include worklist in the generated report on refresh.')
 @click.option('--kuroko-cmd', default='kuroko', help='Command name/path used to execute kuroko.')
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
-def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser):
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser):
     report_path = Path(input_file)
+    current_nonce = secrets.token_hex(16)
 
     if refresh:
-        refresh_report(report_path=report_path, kuroko_cmd=kuroko_cmd, report_args=report_args)
+        refresh_report(
+            report_path=report_path,
+            kuroko_cmd=kuroko_cmd,
+            report_args=report_args,
+            include_worklist=include_worklist
+        )
 
     # Always check existence even after refresh
     if not report_path.exists():
@@ -94,11 +130,58 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
         )
 
     class Handler(BaseHTTPRequestHandler):
+        def do_POST(self):
+            if self.path == '/refresh':
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_data = self.rfile.read(content_length).decode('utf-8')
+                
+                from urllib.parse import parse_qs
+                import hmac
+                params = parse_qs(post_data)
+                nonce_in_post = params.get("nonce", [None])[0]
+
+                # Secure nonce check to prevent CSRF
+                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
+                    try:
+                        refresh_report(
+                            report_path=report_path,
+                            kuroko_cmd=kuroko_cmd,
+                            report_args=report_args,
+                            include_worklist=include_worklist
+                        )
+                        self.send_response(303)
+                        self.send_header('Location', '/')
+                        self.end_headers()
+                        return
+                    except Exception as exc:
+                        import traceback
+                        traceback.print_exc()
+                        self.send_response(500)
+                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(b"Failed to refresh report.")
+                        return
+                else:
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b"Forbidden: Invalid nonce.")
+                    return
+
+            self.send_response(404)
+            self.end_headers()
+
         def do_GET(self):
+            if self.path == '/refresh':
+                # Reject GET requests to /refresh
+                self.send_response(405)
+                self.end_headers()
+                self.wfile.write(b"Method Not Allowed: Use POST to refresh.")
+                return
+
             try:
                 with open(report_path, 'r', encoding='utf-8') as f:
                     markdown_text = f.read()
-                html = render_markdown_to_html(markdown_text)
+                html = render_markdown_to_html(markdown_text, current_nonce)
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/html; charset=utf-8')
                 self.end_headers()

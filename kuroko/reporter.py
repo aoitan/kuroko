@@ -27,7 +27,8 @@ def generate_report(
     filters: Optional[Dict[str, str]] = None,
     include_path: bool = False,
     include_evidence: bool = True,
-    collapse_details: bool = True
+    collapse_details: bool = True,
+    worklists: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     if generated_at is None:
         generated_at = datetime.now()
@@ -70,7 +71,51 @@ def generate_report(
             lines.append(f"| {entry['date']} | {entry['time']} | {phase_str} | {entry['project']} | {issue_str} | {act_str} |")
         lines.append("")
 
-    # 3) Blockers
+    # 3) Worklist
+    if worklists is not None:
+        lines.append("## Worklist")
+        if not worklists:
+            lines.append("No worklist data available or no repositories configured.")
+        else:
+            for res in worklists:
+                pr_count = len(res["pull_requests"])
+                issue_count = len(res["issues"])
+                lines.append(f"### {res['project']} ({res['repo']})")
+                lines.append(f"Summary: Showing latest {pr_count} Open PRs, {issue_count} Open Issues")
+                lines.append("")
+                
+                lines.append("#### Open Pull Requests")
+                if not res["pull_requests"]:
+                    lines.append("No open PRs.")
+                else:
+                    lines.append("| ID | Title | Labels | Updated |")
+                    lines.append("|---|---|---|---|")
+                    for pr in res["pull_requests"]:
+                        labels_str = ", ".join(pr['labels']) if pr['labels'] else "-"
+                        labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                        # Escape Markdown link brackets
+                        title_safe = pr['title'].replace('|', '&#124;').replace('\n', ' ').replace('[', '\\[').replace(']', '\\]')
+                        title_link = f"[{title_safe}]({pr['url']})"
+                        lines.append(f"| #{pr['id']} | {title_link} | {labels_str} | {pr['updated_at']} |")
+                
+                lines.append("")
+                lines.append("#### Open Issues")
+                if not res["issues"]:
+                    lines.append("No open issues.")
+                else:
+                    lines.append("| ID | Title | Labels | Updated |")
+                    lines.append("|---|---|---|---|")
+                    for issue in res["issues"]:
+                        labels_str = ", ".join(issue['labels']) if issue['labels'] else "-"
+                        labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                        # Escape Markdown link brackets
+                        title_safe = issue['title'].replace('|', '&#124;').replace('\n', ' ').replace('[', '\\[').replace(']', '\\]')
+                        title_link = f"[{title_safe}]({issue['url']})"
+                        lines.append(f"| #{issue['id']} | {title_link} | {labels_str} | {issue['updated_at']} |")
+                lines.append("")
+        lines.append("")
+
+    # 4) Blockers
     lines.append("## Blockers")
     blockers = [e for e in entries if e.get('block') and e['block'].strip().lower() not in BLOCK_IGNORE]
 
@@ -109,7 +154,7 @@ def generate_report(
                 lines.extend(details)
             lines.append("")
 
-    # 4) Recent
+    # 5) Recent
     lines.append("## Recent")
     if not entries:
         lines.append("No entries found.")
@@ -129,7 +174,7 @@ def generate_report(
                 lines.append(f"- {entry['time']} {phase_str} {entry['project']} {issue_str} {act_oneline}")
             lines.append("")
 
-    # 5) Sources
+    # 6) Sources
     if include_path:
         lines.append("## Sources")
         if not entries:

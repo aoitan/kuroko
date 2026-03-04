@@ -141,10 +141,11 @@ def worklist(ctx, n, json_output):
 @click.option('--issue', help='Filter to one issue id (e.g., 153).')
 @click.option('--include-path', is_flag=True, help='Include file_path in details and Sources section.')
 @click.option('--include-evidence/--no-include-evidence', default=True, help='Include evd field in details sections.')
+@click.option('--include-worklist', is_flag=True, help='Include open PRs and Issues from GitHub in the report.')
 @click.option('--collapse-details/--no-collapse-details', default=True, help='Wrap per-item detail blocks in <details>.')
 @click.option('--title', default='Kuroko Report', help='Title at the top of the report.')
 @click.pass_context
-def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, collapse_details, title):
+def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, include_worklist, collapse_details, title):
     """Generate a human-readable Markdown report."""
     cfg = ctx.obj['config']
 
@@ -176,6 +177,20 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
         per_project_files=actual_per_project
     )
 
+    worklists = [] if include_worklist else None
+    if include_worklist:
+        from kuroko.worklist import fetch_worklist
+        for p_cfg in cfg.projects:
+            if projects_list and p_cfg.name not in projects_list:
+                continue
+            if p_cfg.repo:
+                try:
+                    data = fetch_worklist(p_cfg.repo, limit=5)
+                    data["project"] = p_cfg.name
+                    worklists.append(data)
+                except RuntimeError as e:
+                    click.echo(f"Warning: Failed to fetch worklist for {p_cfg.name}: {e}", err=True)
+
     filters = {}
     if projects_list:
         filters['project'] = ",".join(projects_list)
@@ -193,7 +208,8 @@ def report(ctx, output_path, per_project_files, since, until, project, issue, in
         filters=filters,
         include_path=include_path,
         include_evidence=include_evidence,
-        collapse_details=collapse_details
+        collapse_details=collapse_details,
+        worklists=worklists
     )
 
     out_path = Path(output_path)

@@ -49,15 +49,22 @@ def render_markdown_to_html(markdown_text: str) -> str:
     ]
     allowed_attrs = bleach.ALLOWED_ATTRIBUTES.copy()
     allowed_attrs['a'] = ['href', 'title']
+    allowed_attrs['th'] = ['style', 'align']
+    allowed_attrs['td'] = ['style', 'align']
     
-    content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs)
+    # Allow text-align for table cell alignment
+    from bleach.css_sanitizer import CSSSanitizer
+    css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
+    
+    content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
     return HTML_TEMPLATE.format(content=content)
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None:
-    args = [kuroko_cmd, "report", str(report_path)]
+    import sys
+    args = shlex.split(kuroko_cmd, posix=(sys.platform != "win32"))
+    args.extend(["report", str(report_path)])
     if report_args:
-        import sys
         args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
 
     result = subprocess.run(args, capture_output=True, text=True)
@@ -97,6 +104,8 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
                 self.end_headers()
                 self.wfile.write(html.encode('utf-8'))
             except Exception:
+                import traceback
+                traceback.print_exc()
                 self.send_response(500)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()

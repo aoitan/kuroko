@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 class ProjectConfig(BaseModel):
     name: str
     root: str
+    repo: Optional[str] = None
 
 class DefaultsConfig(BaseModel):
     per_project_files: int = 5

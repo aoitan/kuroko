@@ -73,6 +73,66 @@ def status(ctx, json_output):
             print(f"{e['project']}: {e['date']} {e['time']} [{e['phase']}] {e['act']}")
 
 @main.command()
+@click.option('--n', default=5, help='Number of items to show per category.')
+@click.option('--json-output', is_flag=True, help='Output in JSON format.')
+@click.pass_context
+def worklist(ctx, n, json_output):
+    """Show open PRs and Issues from GitHub."""
+    from kuroko.worklist import fetch_worklist
+    cfg = ctx.obj['config']
+    results = []
+    
+    for project in cfg.projects:
+        if not project.repo:
+            continue
+        try:
+            data = fetch_worklist(project.repo, limit=n)
+            data["project"] = project.name
+            results.append(data)
+        except RuntimeError as e:
+            click.echo(f"Warning: {e}", err=True)
+
+    if json_output:
+        print_json(results)
+    else:
+        if not results:
+            click.echo("No worklist items found (ensure 'repo' is set in kuroko.config.yaml).")
+            return
+
+        for res in results:
+            pr_count = len(res["pull_requests"])
+            issue_count = len(res["issues"])
+            click.echo(f"## Project: {res['project']} ({res['repo']})")
+            click.echo(f"Summary: {pr_count} Open PRs, {issue_count} Open Issues\n")
+            
+            click.echo("### Open Pull Requests")
+            if not res["pull_requests"]:
+                click.echo("No open PRs.")
+            else:
+                click.echo("| ID | Title | Labels | Updated |")
+                click.echo("|---|---|---|---|")
+                for pr in res["pull_requests"]:
+                    labels_str = ", ".join(pr['labels']) if pr['labels'] else "-"
+                    labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                    title_safe = pr['title'].replace('|', '&#124;').replace('\n', ' ')
+                    title_link = f"[{title_safe}]({pr['url']})"
+                    click.echo(f"| #{pr['id']} | {title_link} | {labels_str} | {pr['updated_at']} |")
+            
+            click.echo("\n### Open Issues")
+            if not res["issues"]:
+                click.echo("No open issues.")
+            else:
+                click.echo("| ID | Title | Labels | Updated |")
+                click.echo("|---|---|---|---|")
+                for issue in res["issues"]:
+                    labels_str = ", ".join(issue['labels']) if issue['labels'] else "-"
+                    labels_str = labels_str.replace('|', '&#124;').replace('\n', ' ')
+                    title_safe = issue['title'].replace('|', '&#124;').replace('\n', ' ')
+                    title_link = f"[{title_safe}]({issue['url']})"
+                    click.echo(f"| #{issue['id']} | {title_link} | {labels_str} | {issue['updated_at']} |")
+            click.echo("\n" + "-" * 40 + "\n")
+
+@main.command()
 @click.argument('output_path', type=click.Path(dir_okay=False))
 @click.option('--per-project-files', type=int, default=None, help='Max number of checkpoint files read per project.')
 @click.option('--since', help='Include entries on/after the date (YYYY-MM-DD).')

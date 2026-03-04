@@ -95,9 +95,12 @@ def collect_checkpoints(
         for path_obj in filtered_files:
             filename = path_obj.name
             meta_match = re.match(r'(\d{4}-\d{2}-\d{2})__(.*?)__(.*)\.md', filename)
+            
+            # Always use project name from config for consistency
+            proj_name = project.name
+            
             if meta_match:
                 date_str = meta_match.group(1)
-                proj_name = meta_match.group(2)
                 issue_info = meta_match.group(3)
                 
                 # Precise extraction: ISSUE-123-something -> 123
@@ -105,7 +108,6 @@ def collect_checkpoints(
                 issue_id = issue_match.group(1) if issue_match else None
             else:
                 date_str = datetime.fromtimestamp(path_obj.stat().st_mtime).strftime('%Y-%m-%d')
-                proj_name = project.name
                 issue_id = None
             
             with open(path_obj, "r", encoding="utf-8") as f:

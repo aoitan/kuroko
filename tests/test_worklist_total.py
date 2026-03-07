@@ -44,7 +44,8 @@ def test_fetch_worklist_fallback_on_error():
 
     with patch("subprocess.run", side_effect=side_effect):
         data = fetch_worklist("owner/repo", limit=5)
-        assert data["total_pull_requests"] == 1
+        # Should return -1 (unknown) instead of falling back to list length
+        assert data["total_pull_requests"] == -1
 
 from click.testing import CliRunner
 from kuroko.cli import main
@@ -73,3 +74,28 @@ projects:
         result = runner.invoke(main, ["--config", str(config_file), "worklist"])
         assert result.exit_code == 0
         assert "Summary: 10 Open PRs (showing latest 1), 5 Open Issues (showing latest 0)" in result.output
+
+def test_cli_worklist_shows_unknown_totals(tmp_path):
+    config_file = tmp_path / "kuroko.config.yaml"
+    config_file.write_text("""
+version: 1
+projects:
+  - name: my-project
+    root: /tmp
+    repo: owner/repo
+""")
+    
+    mock_data = {
+        "repo": "owner/repo",
+        "pull_requests": [],
+        "issues": [],
+        "total_pull_requests": -1,
+        "total_issues": -1,
+        "project": "my-project"
+    }
+    
+    with patch("kuroko.worklist.fetch_worklist", return_value=mock_data):
+        runner = CliRunner()
+        result = runner.invoke(main, ["--config", str(config_file), "worklist"])
+        assert result.exit_code == 0
+        assert "Summary: unknown Open PRs (showing latest 0), unknown Open Issues (showing latest 0)" in result.output

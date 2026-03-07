@@ -65,15 +65,9 @@ def fetch_worklist(repo: str, limit: int = 5, use_search_api: bool = True) -> Di
     if use_search_api:
         total_prs = _run_gh_total_count(repo, "pr")
         total_issues = _run_gh_total_count(repo, "issue")
-        
-        # Fallback logic if count failed
-        if total_prs < 0:
-            total_prs = len(prs)
-        if total_issues < 0:
-            total_issues = len(issues)
     else:
-        total_prs = len(prs)
-        total_issues = len(issues)
+        total_prs = -1
+        total_issues = -1
 
     return {
         "repo": repo,

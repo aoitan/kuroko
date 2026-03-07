@@ -102,11 +102,14 @@ def worklist(ctx, n, json_output):
         for res in results:
             pr_count = len(res["pull_requests"])
             issue_count = len(res["issues"])
-            total_prs = res.get("total_pull_requests", pr_count)
-            total_issues = res.get("total_issues", issue_count)
+            total_prs = res.get("total_pull_requests", -1)
+            total_issues = res.get("total_issues", -1)
+            
+            pr_total_str = f"{total_prs}" if total_prs >= 0 else "unknown"
+            issue_total_str = f"{total_issues}" if total_issues >= 0 else "unknown"
             
             click.echo(f"## Project: {res['project']} ({res['repo']})")
-            click.echo(f"Summary: {total_prs} Open PRs (showing latest {pr_count}), {total_issues} Open Issues (showing latest {issue_count})\n")
+            click.echo(f"Summary: {pr_total_str} Open PRs (showing latest {pr_count}), {issue_total_str} Open Issues (showing latest {issue_count})\n")
             
             click.echo("### Open Pull Requests")
             if not res["pull_requests"]:

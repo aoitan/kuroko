@@ -80,8 +80,11 @@ def generate_report(
             for res in worklists:
                 pr_count = len(res["pull_requests"])
                 issue_count = len(res["issues"])
+                total_prs = res.get("total_pull_requests", pr_count)
+                total_issues = res.get("total_issues", issue_count)
+                
                 lines.append(f"### {res['project']} ({res['repo']})")
-                lines.append(f"Summary: Showing latest {pr_count} Open PRs, {issue_count} Open Issues")
+                lines.append(f"Summary: {total_prs} Open PRs (showing latest {pr_count}), {total_issues} Open Issues (showing latest {issue_count})")
                 lines.append("")
                 
                 lines.append("#### Open Pull Requests")

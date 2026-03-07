@@ -198,9 +198,18 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
         )
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            if self.path == '/refresh':
+        def _validate_nonce(self) -> bool:
+            """Parses the POST body and validates the nonce against current_nonce. Returns True if valid."""
+            try:
+                # Limit body size for security
+                max_body = 4096
                 content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > max_body:
+                    self.send_response(413) # Request Entity Too Large
+                    self.end_headers()
+                    self.wfile.write(b"Request body too large.")
+                    return False
+                
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 
                 from urllib.parse import parse_qs
@@ -208,77 +217,78 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                 params = parse_qs(post_data)
                 nonce_in_post = params.get("nonce", [None])[0]
 
-                # Secure nonce check to prevent CSRF
                 if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                    try:
-                        refresh_report(
-                            report_path=report_path,
-                            kuroko_cmd=kuroko_cmd,
-                            report_args=report_args,
-                            include_worklist=include_worklist
-                        )
-                        self.send_response(303)
-                        self.send_header('Location', '/')
-                        self.end_headers()
-                        return
-                    except Exception as exc:
-                        import traceback
-                        traceback.print_exc()
-                        self.send_response(500)
-                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                        self.end_headers()
-                        self.wfile.write(b"Failed to refresh report.")
-                        return
+                    return True
                 else:
                     self.send_response(403)
                     self.end_headers()
                     self.wfile.write(b"Forbidden: Invalid nonce.")
+                    return False
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Bad Request")
+                return False
+
+        def do_POST(self):
+            if self.path == '/refresh':
+                if not self._validate_nonce():
+                    return
+
+                try:
+                    refresh_report(
+                        report_path=report_path,
+                        kuroko_cmd=kuroko_cmd,
+                        report_args=report_args,
+                        include_worklist=include_worklist
+                    )
+                    self.send_response(303)
+                    self.send_header('Location', '/')
+                    self.end_headers()
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Failed to refresh report.")
                     return
 
             if self.path == '/suggest':
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length).decode('utf-8')
-                
-                from urllib.parse import parse_qs
-                import hmac
-                params = parse_qs(post_data)
-                nonce_in_post = params.get("nonce", [None])[0]
+                if not self._validate_nonce():
+                    return
 
-                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                    try:
-                        with open(report_path, 'r', encoding='utf-8') as f:
-                            report_text = f.read()
-                        
-                        # Limit context size to prevent massive requests
-                        max_context_chars = 20000
-                        if len(report_text) > max_context_chars:
-                            report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        report_text = f.read()
+                    
+                    # Limit context size to prevent massive requests
+                    max_context_chars = 20000
+                    if len(report_text) > max_context_chars:
+                        report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
 
-                        from kuroko.llm import LLMClient
-                        client = LLMClient(kuroko_config.llm)
-                        messages = [
-                            {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
-                            {"role": "user", "content": f"Current status report:\n\n{report_text}"}
-                        ]
-                        suggestion = client.chat_completion(messages)
-                        
-                        self.send_response(200)
-                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                        self.end_headers()
-                        self.wfile.write(suggestion.encode('utf-8'))
-                        return
-                    except Exception as exc:
-                        import traceback
-                        traceback.print_exc()
-                        self.send_response(500)
-                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                        self.end_headers()
-                        self.wfile.write(f"Error: {str(exc)}".encode('utf-8'))
-                        return
-                else:
-                    self.send_response(403)
+                    from kuroko.llm import LLMClient
+                    client = LLMClient(kuroko_config.llm)
+                    messages = [
+                        {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
+                        {"role": "user", "content": f"Current status report:\n\n{report_text}"}
+                    ]
+                    suggestion = client.chat_completion(messages)
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
                     self.end_headers()
-                    self.wfile.write(b"Forbidden")
+                    self.wfile.write(suggestion.encode('utf-8'))
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    # Do not leak internal error details (e.g. LLM URL, file paths) to the client
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
                     return
 
             self.send_response(404)

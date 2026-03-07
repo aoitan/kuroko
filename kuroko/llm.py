@@ -31,6 +31,17 @@ class LLMClient:
         try:
             with urllib.request.urlopen(req, timeout=self.config.timeout) as res:
                 body = json.loads(res.read().decode("utf-8"))
-                return body["choices"][0]["message"]["content"]
+                choices = body.get("choices")
+                if not choices or not isinstance(choices, list):
+                    raise RuntimeError("Invalid response format from LLM API: missing 'choices'")
+                content = choices[0].get("message", {}).get("content")
+                if content is None:
+                    raise RuntimeError("Invalid response format from LLM API: missing 'content'")
+                return content
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"LLM API returned error {e.code}: {error_body}") from e
         except Exception as e:
-            raise RuntimeError(f"Error connecting to LLM API: {e}") from e
+            if isinstance(e, RuntimeError):
+                raise
+            raise RuntimeError(f"Error connecting to or parsing LLM API: {e}") from e

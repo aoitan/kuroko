@@ -78,7 +78,7 @@ def status(ctx, json_output):
 @click.pass_context
 def worklist(ctx, n, json_output):
     """Show open PRs and Issues from GitHub."""
-    from kuroko.worklist import fetch_worklist
+    from kuroko.worklist import fetch_worklist, format_total_count
     cfg = ctx.obj['config']
     results = []
     
@@ -89,6 +89,10 @@ def worklist(ctx, n, json_output):
             data = fetch_worklist(project.repo, limit=n)
             data["project"] = project.name
             results.append(data)
+            
+            # Surface warning if totals are unknown (only in human-readable mode)
+            if not json_output and (data.get("total_pull_requests") == -1 or data.get("total_issues") == -1):
+                click.echo(f"Warning: Could not fetch all total counts for {project.name} (API error or rate limit).", err=True)
         except RuntimeError as e:
             click.echo(f"Warning: {e}", err=True)
 
@@ -105,8 +109,8 @@ def worklist(ctx, n, json_output):
             total_prs = res.get("total_pull_requests", -1)
             total_issues = res.get("total_issues", -1)
             
-            pr_total_str = f"{total_prs}" if total_prs >= 0 else "unknown"
-            issue_total_str = f"{total_issues}" if total_issues >= 0 else "unknown"
+            pr_total_str = format_total_count(total_prs)
+            issue_total_str = format_total_count(total_issues)
             
             click.echo(f"## Project: {res['project']} ({res['repo']})")
             click.echo(f"Summary: {pr_total_str} Open PRs (showing latest {pr_count}), {issue_total_str} Open Issues (showing latest {issue_count})\n")

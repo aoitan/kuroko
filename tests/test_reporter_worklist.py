@@ -20,6 +20,20 @@ def test_generate_report_with_worklist():
     assert "PR Title" in report
     assert "| #8 |" in report
 
+def test_generate_report_with_unknown_totals():
+    entries = []
+    worklists = [{
+        "project": "kuroko",
+        "repo": "aoitan/kuroko",
+        "pull_requests": [],
+        "issues": [],
+        "total_pull_requests": -1,
+        "total_issues": -1
+    }]
+    
+    report = generate_report(entries, worklists=worklists)
+    assert "Summary: unknown Open PRs (showing latest 0), unknown Open Issues (showing latest 0)" in report
+
 def test_generate_report_without_worklist():
     entries = []
     report = generate_report(entries)

@@ -58,6 +58,10 @@ def _run_gh_total_count(repo: str, item_type: str) -> int:
         # Re-raise FileNotFoundError as it's a critical configuration issue (gh not installed)
         raise RuntimeError("gh command not found. Please install GitHub CLI.")
 
+def format_total_count(count: int) -> str:
+    """Helper to format total counts, converting -1 sentinel to 'unknown'."""
+    return str(count) if count >= 0 else "unknown"
+
 def fetch_worklist(repo: str, limit: int = 5, use_search_api: bool = True) -> Dict[str, Any]:
     prs = _run_gh_list(repo, "pr", limit)
     issues = _run_gh_list(repo, "issue", limit)

@@ -44,9 +44,9 @@ class TestLLMClient(unittest.TestCase):
         mock_urlopen.side_effect = Exception("Connection error")
         
         messages = [{"role": "user", "content": "hello"}]
-        result = self.client.chat_completion(messages)
-        
-        self.assertTrue(result.startswith("Error connecting to LLM API:"))
+        with self.assertRaises(RuntimeError) as cm:
+            self.client.chat_completion(messages)
+        self.assertIn("Error connecting to LLM API: Connection error", str(cm.exception))
 
 if __name__ == "__main__":
     unittest.main()

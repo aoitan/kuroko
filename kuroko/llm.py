@@ -33,4 +33,4 @@ class LLMClient:
                 body = json.loads(res.read().decode("utf-8"))
                 return body["choices"][0]["message"]["content"]
         except Exception as e:
-            return f"Error connecting to LLM API: {str(e)}"
+            raise RuntimeError(f"Error connecting to LLM API: {e}") from e

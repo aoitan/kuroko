@@ -81,7 +81,7 @@ HTML_TEMPLATE = """<!doctype html>
 """
 
 
-class ReusableTCPServer(socketserver.TCPServer):
+class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 
@@ -148,11 +148,40 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
 @click.option('--config', default=None, help='Path to kuroko.config.yaml')
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config):
+@click.option(
+    '--allow-remote',
+    is_flag=True,
+    help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
+)
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config, allow_remote):
     from kuroko.config import load_config
     kuroko_config = load_config(config)
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
+
+    # Prevent accidental exposure on non-localhost interfaces unless explicitly allowed.
+    normalized_host = (host or "").strip().lower()
+    is_localhost = (
+        normalized_host == "localhost"
+        or normalized_host == "::1"
+        or normalized_host.startswith("127.")
+    )
+    if not is_localhost and not allow_remote:
+        raise click.ClickException(
+            "Refusing to bind HTTP server to non-localhost host "
+            f"({host!r}) without --allow-remote.\n"
+            "The kanpe web UI exposes /refresh and /suggest endpoints that are only protected by a "
+            "nonce embedded in the HTML. If you bind to a publicly reachable interface, third parties "
+            "can fetch `/`, obtain the nonce, and replay these actions.\n"
+            "Use --allow-remote only on trusted networks and behind appropriate access controls."
+        )
+    if not is_localhost and allow_remote:
+        click.echo(
+            "WARNING: kanpe HTTP server is bound to a non-localhost interface. "
+            "The /refresh and /suggest endpoints are only protected by a nonce that can be obtained "
+            "from GET `/`. Do NOT expose this to untrusted networks.",
+            err=True,
+        )
 
     if refresh:
         refresh_report(
@@ -220,6 +249,11 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                         with open(report_path, 'r', encoding='utf-8') as f:
                             report_text = f.read()
                         
+                        # Limit context size to prevent massive requests
+                        max_context_chars = 20000
+                        if len(report_text) > max_context_chars:
+                            report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+
                         from kuroko.llm import LLMClient
                         client = LLMClient(kuroko_config.llm)
                         messages = [
@@ -251,28 +285,33 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
             self.end_headers()
 
         def do_GET(self):
-            if self.path == '/refresh':
-                # Reject GET requests to /refresh
-                self.send_response(405)
-                self.end_headers()
-                self.wfile.write(b"Method Not Allowed: Use POST to refresh.")
+            if self.path == '/':
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        markdown_text = f.read()
+                    html = render_markdown_to_html(markdown_text, current_nonce)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(html.encode('utf-8'))
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error reading or rendering report.")
                 return
 
-            try:
-                with open(report_path, 'r', encoding='utf-8') as f:
-                    markdown_text = f.read()
-                html = render_markdown_to_html(markdown_text, current_nonce)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
+            if self.path in ['/refresh', '/suggest']:
+                self.send_response(405)
                 self.end_headers()
-                self.wfile.write(html.encode('utf-8'))
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                self.send_response(500)
-                self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                self.end_headers()
-                self.wfile.write(b"Error reading or rendering report.")
+                self.wfile.write(b"Method Not Allowed: Use POST.")
+                return
+
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
 
         def log_message(self, format, *args):
             return

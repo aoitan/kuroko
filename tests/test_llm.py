@@ -46,7 +46,7 @@ class TestLLMClient(unittest.TestCase):
         messages = [{"role": "user", "content": "hello"}]
         with self.assertRaises(RuntimeError) as cm:
             self.client.chat_completion(messages)
-        self.assertIn("Error connecting to LLM API: Connection error", str(cm.exception))
+        self.assertIn("Error connecting to or parsing LLM API: Connection error", str(cm.exception))
 
 if __name__ == "__main__":
     unittest.main()

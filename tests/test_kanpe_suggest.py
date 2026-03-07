@@ -34,4 +34,4 @@ def test_llm_client_raises_on_error():
         mock_urlopen.side_effect = Exception("API Down")
         with pytest.raises(RuntimeError) as excinfo:
             client.chat_completion([{"role": "user", "content": "hi"}])
-        assert "Error connecting to LLM API: API Down" in str(excinfo.value)
+        assert "Error connecting to or parsing LLM API: API Down" in str(excinfo.value)

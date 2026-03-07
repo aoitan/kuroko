@@ -32,20 +32,56 @@ HTML_TEMPLATE = """<!doctype html>
   </head>
   <body>
     <div class="header-actions">
+      <button id="suggest-btn" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion()">次の一手を提案</button>
       <form action="/refresh" method="post">
         <input type="hidden" name="nonce" value="{nonce}">
         <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
       </form>
     </div>
+    <div id="suggestion-box" style="display: none; background: #f8f9fa; border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
+      <strong>LLMの提案:</strong>
+      <div id="suggestion-content" style="white-space: pre-wrap; margin-top: 0.5rem;"></div>
+    </div>
     <div id="report-content">
       {content}
     </div>
+    <script>
+      async function getSuggestion() {{
+        const btn = document.getElementById('suggest-btn');
+        const box = document.getElementById('suggestion-box');
+        const content = document.getElementById('suggestion-content');
+        
+        btn.classList.add('loading');
+        btn.innerText = '考え中...';
+        box.style.display = 'block';
+        content.innerText = 'LLMに問い合わせています...';
+        
+        try {{
+          const response = await fetch('/suggest', {{
+            method: 'POST',
+            body: new URLSearchParams({{ 'nonce': '{nonce}' }})
+          }});
+          if (response.ok) {{
+            const text = await response.text();
+            content.innerText = text;
+          }} else {{
+            const errorText = await response.text();
+            content.innerText = 'エラーが発生しました: ' + errorText;
+          }}
+        }} catch (e) {{
+          content.innerText = '通信エラー: ' + e;
+        }} finally {{
+          btn.classList.remove('loading');
+          btn.innerText = '次の一手を提案';
+        }}
+      }}
+    </script>
   </body>
 </html>
 """
 
 
-class ReusableTCPServer(socketserver.TCPServer):
+class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 
@@ -111,9 +147,41 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser):
+@click.option('--config', default=None, help='Path to kuroko.config.yaml')
+@click.option(
+    '--allow-remote',
+    is_flag=True,
+    help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
+)
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config, allow_remote):
+    from kuroko.config import load_config
+    kuroko_config = load_config(config)
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
+
+    # Prevent accidental exposure on non-localhost interfaces unless explicitly allowed.
+    normalized_host = (host or "").strip().lower()
+    is_localhost = (
+        normalized_host == "localhost"
+        or normalized_host == "::1"
+        or normalized_host.startswith("127.")
+    )
+    if not is_localhost and not allow_remote:
+        raise click.ClickException(
+            "Refusing to bind HTTP server to non-localhost host "
+            f"({host!r}) without --allow-remote.\n"
+            "The kanpe web UI exposes /refresh and /suggest endpoints that are only protected by a "
+            "nonce embedded in the HTML. If you bind to a publicly reachable interface, third parties "
+            "can fetch `/`, obtain the nonce, and replay these actions.\n"
+            "Use --allow-remote only on trusted networks and behind appropriate access controls."
+        )
+    if not is_localhost and allow_remote:
+        click.echo(
+            "WARNING: kanpe HTTP server is bound to a non-localhost interface. "
+            "The /refresh and /suggest endpoints are only protected by a nonce that can be obtained "
+            "from GET `/`. Do NOT expose this to untrusted networks.",
+            err=True,
+        )
 
     if refresh:
         refresh_report(
@@ -130,9 +198,18 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
         )
 
     class Handler(BaseHTTPRequestHandler):
-        def do_POST(self):
-            if self.path == '/refresh':
+        def _validate_nonce(self) -> bool:
+            """Parses the POST body and validates the nonce against current_nonce. Returns True if valid."""
+            try:
+                # Limit body size for security
+                max_body = 4096
                 content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > max_body:
+                    self.send_response(413) # Request Entity Too Large
+                    self.end_headers()
+                    self.wfile.write(b"Request body too large.")
+                    return False
+                
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 
                 from urllib.parse import parse_qs
@@ -140,59 +217,111 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                 params = parse_qs(post_data)
                 nonce_in_post = params.get("nonce", [None])[0]
 
-                # Secure nonce check to prevent CSRF
                 if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                    try:
-                        refresh_report(
-                            report_path=report_path,
-                            kuroko_cmd=kuroko_cmd,
-                            report_args=report_args,
-                            include_worklist=include_worklist
-                        )
-                        self.send_response(303)
-                        self.send_header('Location', '/')
-                        self.end_headers()
-                        return
-                    except Exception as exc:
-                        import traceback
-                        traceback.print_exc()
-                        self.send_response(500)
-                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                        self.end_headers()
-                        self.wfile.write(b"Failed to refresh report.")
-                        return
+                    return True
                 else:
                     self.send_response(403)
                     self.end_headers()
                     self.wfile.write(b"Forbidden: Invalid nonce.")
+                    return False
+            except Exception:
+                self.send_response(400)
+                self.end_headers()
+                self.wfile.write(b"Bad Request")
+                return False
+
+        def do_POST(self):
+            if self.path == '/refresh':
+                if not self._validate_nonce():
+                    return
+
+                try:
+                    refresh_report(
+                        report_path=report_path,
+                        kuroko_cmd=kuroko_cmd,
+                        report_args=report_args,
+                        include_worklist=include_worklist
+                    )
+                    self.send_response(303)
+                    self.send_header('Location', '/')
+                    self.end_headers()
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Failed to refresh report.")
+                    return
+
+            if self.path == '/suggest':
+                if not self._validate_nonce():
+                    return
+
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        report_text = f.read()
+                    
+                    # Limit context size to prevent massive requests
+                    max_context_chars = 20000
+                    if len(report_text) > max_context_chars:
+                        report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+
+                    from kuroko.llm import LLMClient
+                    client = LLMClient(kuroko_config.llm)
+                    messages = [
+                        {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
+                        {"role": "user", "content": f"Current status report:\n\n{report_text}"}
+                    ]
+                    suggestion = client.chat_completion(messages)
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(suggestion.encode('utf-8'))
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    # Do not leak internal error details (e.g. LLM URL, file paths) to the client
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
                     return
 
             self.send_response(404)
             self.end_headers()
 
         def do_GET(self):
-            if self.path == '/refresh':
-                # Reject GET requests to /refresh
-                self.send_response(405)
-                self.end_headers()
-                self.wfile.write(b"Method Not Allowed: Use POST to refresh.")
+            if self.path == '/':
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        markdown_text = f.read()
+                    html = render_markdown_to_html(markdown_text, current_nonce)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(html.encode('utf-8'))
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error reading or rendering report.")
                 return
 
-            try:
-                with open(report_path, 'r', encoding='utf-8') as f:
-                    markdown_text = f.read()
-                html = render_markdown_to_html(markdown_text, current_nonce)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
+            if self.path in ['/refresh', '/suggest']:
+                self.send_response(405)
                 self.end_headers()
-                self.wfile.write(html.encode('utf-8'))
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                self.send_response(500)
-                self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                self.end_headers()
-                self.wfile.write(b"Error reading or rendering report.")
+                self.wfile.write(b"Method Not Allowed: Use POST.")
+                return
+
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
 
         def log_message(self, format, *args):
             return

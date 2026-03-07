@@ -18,3 +18,15 @@ defaults:
   checkpoint_dir: checkpoint
   # 検索対象のファイルパターン
   filename_glob: "*.md"
+
+# LLM (OpenAI互換API) の設定
+llm:
+  # OpenAI互換APIのベースURL (デフォルト: http://localhost:11434/v1)
+  # Ollamaを使用する場合はそのままでも動作します。
+  url: "http://localhost:11434/v1"
+  # 使用するモデル名 (デフォルト: llama3)
+  model: "llama3"
+  # APIキーが必要な場合は設定してください (デフォルト: なし)
+  # api_key: "your-api-key"
+  # APIリクエストのタイムアウト秒数 (デフォルト: 30)
+  timeout: 30

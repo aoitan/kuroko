@@ -62,8 +62,8 @@ HTML_TEMPLATE = """<!doctype html>
             body: new URLSearchParams({{ 'nonce': '{nonce}' }})
           }});
           if (response.ok) {{
-            const text = await response.text();
-            content.innerText = text;
+            const html = await response.text();
+            content.innerHTML = html;
           }} else {{
             const errorText = await response.text();
             content.innerText = 'エラーが発生しました: ' + errorText;
@@ -85,17 +85,13 @@ class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
-    # md_in_html is required to parse Markdown inside <details> tags
-    content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
-    
-    # Sanitize HTML after rendering from Markdown to prevent XSS (e.g., javascript: links)
+def clean_html(html: str) -> str:
     # Allow safe tags for report visualization.
     allowed_tags = list(bleach.ALLOWED_TAGS) + [
         'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
         'p', 'br', 'hr', 'pre', 'code', 
         'table', 'thead', 'tbody', 'tr', 'th', 'td',
-        'details', 'summary'
+        'details', 'summary', 'strong', 'em', 'ul', 'ol', 'li'
     ]
     allowed_attrs = bleach.ALLOWED_ATTRIBUTES.copy()
     allowed_attrs['a'] = ['href', 'title']
@@ -106,7 +102,13 @@ def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
     from bleach.css_sanitizer import CSSSanitizer
     css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
     
-    content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
+    return bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
+
+
+def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
+    # md_in_html is required to parse Markdown inside <details> tags
+    content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
+    content = clean_html(content_raw)
     return HTML_TEMPLATE.format(content=content, nonce=nonce)
 
 
@@ -275,11 +277,25 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                         {"role": "user", "content": f"Current status report:\n\n{report_text}"}
                     ]
                     suggestion = client.chat_completion(messages)
+                    # Print to console for server-side verification
+                    print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")
+                    
+                    suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
+                    
+                    # Append raw text in a details tag for UI verification
+                    import html
+                    raw_escaped = html.escape(suggestion)
+                    suggestion_html += (
+                        f'<hr><details style="margin-top: 1rem; color: #666; font-size: 0.85rem;">'
+                        f'<summary style="cursor: pointer;">生の回答を表示 (Markdown)</summary>'
+                        f'<pre style="white-space: pre-wrap; background: #eee; padding: 0.5rem; margin-top: 0.5rem; border-radius: 4px;">{raw_escaped}</pre>'
+                        f'</details>'
+                    )
                     
                     self.send_response(200)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
                     self.end_headers()
-                    self.wfile.write(suggestion.encode('utf-8'))
+                    self.wfile.write(suggestion_html.encode('utf-8'))
                     return
                 except Exception as exc:
                     import traceback

@@ -32,14 +32,50 @@ HTML_TEMPLATE = """<!doctype html>
   </head>
   <body>
     <div class="header-actions">
+      <button id="suggest-btn" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion()">次の一手を提案</button>
       <form action="/refresh" method="post">
         <input type="hidden" name="nonce" value="{nonce}">
         <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
       </form>
     </div>
+    <div id="suggestion-box" style="display: none; background: #f8f9fa; border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
+      <strong>LLMの提案:</strong>
+      <div id="suggestion-content" style="white-space: pre-wrap; margin-top: 0.5rem;"></div>
+    </div>
     <div id="report-content">
       {content}
     </div>
+    <script>
+      async function getSuggestion() {{
+        const btn = document.getElementById('suggest-btn');
+        const box = document.getElementById('suggestion-box');
+        const content = document.getElementById('suggestion-content');
+        
+        btn.classList.add('loading');
+        btn.innerText = '考え中...';
+        box.style.display = 'block';
+        content.innerText = 'LLMに問い合わせています...';
+        
+        try {{
+          const response = await fetch('/suggest', {{
+            method: 'POST',
+            body: new URLSearchParams({{ 'nonce': '{nonce}' }})
+          }});
+          if (response.ok) {{
+            const text = await response.text();
+            content.innerText = text;
+          }} else {{
+            const errorText = await response.text();
+            content.innerText = 'エラーが発生しました: ' + errorText;
+          }}
+        }} catch (e) {{
+          content.innerText = '通信エラー: ' + e;
+        }} finally {{
+          btn.classList.remove('loading');
+          btn.innerText = '次の一手を提案';
+        }}
+      }}
+    </script>
   </body>
 </html>
 """
@@ -111,7 +147,10 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser):
+@click.option('--config', default=None, help='Path to kuroko.config.yaml')
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config):
+    from kuroko.config import load_config
+    kuroko_config = load_config(config)
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
 
@@ -165,6 +204,47 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                     self.send_response(403)
                     self.end_headers()
                     self.wfile.write(b"Forbidden: Invalid nonce.")
+                    return
+
+            if self.path == '/suggest':
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_data = self.rfile.read(content_length).decode('utf-8')
+                
+                from urllib.parse import parse_qs
+                import hmac
+                params = parse_qs(post_data)
+                nonce_in_post = params.get("nonce", [None])[0]
+
+                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
+                    try:
+                        with open(report_path, 'r', encoding='utf-8') as f:
+                            report_text = f.read()
+                        
+                        from kuroko.llm import LLMClient
+                        client = LLMClient(kuroko_config.llm)
+                        messages = [
+                            {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
+                            {"role": "user", "content": f"Current status report:\n\n{report_text}"}
+                        ]
+                        suggestion = client.chat_completion(messages)
+                        
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(suggestion.encode('utf-8'))
+                        return
+                    except Exception as exc:
+                        import traceback
+                        traceback.print_exc()
+                        self.send_response(500)
+                        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                        self.end_headers()
+                        self.wfile.write(f"Error: {str(exc)}".encode('utf-8'))
+                        return
+                else:
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b"Forbidden")
                     return
 
             self.send_response(404)

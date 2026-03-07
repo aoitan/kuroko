@@ -2,6 +2,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import defaultdict
 from kuroko.constants import BLOCK_IGNORE
+from kuroko.worklist import format_total_count
 
 
 PHASE_MAP = {
@@ -80,11 +81,14 @@ def generate_report(
             for res in worklists:
                 pr_count = len(res["pull_requests"])
                 issue_count = len(res["issues"])
-                total_prs = res.get("total_pull_requests", pr_count)
-                total_issues = res.get("total_issues", issue_count)
+                total_prs = res.get("total_pull_requests", -1)
+                total_issues = res.get("total_issues", -1)
+                
+                pr_total_str = format_total_count(total_prs)
+                issue_total_str = format_total_count(total_issues)
                 
                 lines.append(f"### {res['project']} ({res['repo']})")
-                lines.append(f"Summary: {total_prs} Open PRs (showing latest {pr_count}), {total_issues} Open Issues (showing latest {issue_count})")
+                lines.append(f"Summary: {pr_total_str} Open PRs (showing latest {pr_count}), {issue_total_str} Open Issues (showing latest {issue_count})")
                 lines.append("")
                 
                 lines.append("#### Open Pull Requests")

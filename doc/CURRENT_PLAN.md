@@ -1,46 +1,34 @@
-# Implementation Plan: `kuroko worklist` Subcommand
+# Implementation Plan: [PoC] kanpe LLM Suggestion Feature (#7)
 
 ## 1. 概要とゴール (Summary & Goal)
-GitHub リポジトリから Open な PR と Issue を取得し、プロジェクトごとに一覧表示するサブコマンド `kuroko worklist` を追加する。
-
-- **Must**:
-  - `kuroko.config.yaml` への `repo` フィールド（owner/repo 形式）の追加。
-  - `gh` コマンドを使用した PR/Issue データの取得。
-  - Markdown テーブル形式での標準出力。
-  - `--json-output` オプションによる JSON 形式での出力。
-- **Want**:
-  - `gh` コマンドがインストールされていない場合の適切なエラーメッセージ。
-  - Stale アイテム（最終更新から 7 日以上経過）のハイライトまたは統計。
+- **Must**: `kanpe` のブラウザ画面に「次の一手を提案」ボタンを追加し、OpenAI 互換 API（Ollama 等）経由で LLM からのアドバイスを表示する。
+- **Want**: 提案内容の履歴保存、プロンプトのカスタマイズ機能（今回はスコープ外）。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- `kuroko/config.py`: `ProjectConfig` クラスへの `repo: Optional[str] = None` フィールドの追加。
-- `kuroko/worklist.py` (新規): `gh` コマンド呼び出しとデータ構造化ロジックの追加。
-- `kuroko/cli.py`: `worklist` サブコマンドの実装と `main` への登録。
-- 出力フォーマットの実装（Markdown / JSON）。
+- `kuroko/llm.py` (新規): OpenAI 互換 API クライアントの実装。
+- `kuroko/config.py`: LLM 設定（`llm_url`, `llm_model` 等）の追加。
+- `kanpe/cli.py`: 
+    - HTML テンプレートにボタンと提案表示エリアを追加。
+    - `/suggest` エンドポイントを実装し、非同期で LLM 提案を返す。
+- プロンプトの設計: レポート内容（Status, Worklist, Blockers）を元にしたアドバイス生成。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
-- GitHub 以外のプラットフォーム（GitLab, Bitbucket 等）への対応。
-- `gh` コマンド以外の方法（直接 API を叩く等）によるデータ取得。
-- PR/Issue の詳細なフィルタリング機能（サブコマンドのオプションとして複雑なクエリを渡すなど）。
+- Ollama 本体のセットアップ。
+- ストリーミング回答（今回は PoC なので一括返却で十分）。
+- 複数の LLM プロバイダへの対応（OpenAI 互換に限定）。
 
 ## 3. 実装ステップ (Implementation Steps)
-1. [ ] **Step 1: 設定ファイルの拡張**
-   - *Action*: `kuroko/config.py` の `ProjectConfig` に `repo` フィールドを追加。
-2. [ ] **Step 2: データ取得ロジックの実装**
-   - *Action*: `kuroko/worklist.py` を新規作成。`subprocess` を介して `gh pr list` および `gh issue list` を実行し、指定された項目（ID, タイトル, 更新日時等）をパースする関数を作成。
-   - *Validation*: ダミーのリポジトリ設定を用いて、正しくリストが取得・パースされるかテスト。
-3. [ ] **Step 3: CLI サブコマンドの追加**
-   - *Action*: `kuroko/cli.py` に `@main.command()` として `worklist` を追加。取得したデータをプロジェクトごとにループして Markdown テーブルで出力する。
-   - *Validation*: `kuroko worklist` 実行時に Markdown が出力されることを確認。
-4. [ ] **Step 4: JSON 出力対応**
-   - *Action*: `--json-output` フラグがある場合に、パース済みのオブジェクトを JSON 形式で print する。
+1. [ ] **Step 1**: `kuroko/config.py` に LLM 用の設定項目を追加する。
+2. [ ] **Step 2**: `kuroko/llm.py` を新規作成し、OpenAI 互換 API へのリクエスト処理を実装する。
+3. [ ] **Step 3**: `kanpe/cli.py` に `/suggest` エンドポイントを追加し、現在のレポートファイルを読み取って LLM に投げるロジックを実装する。
+4. [ ] **Step 4**: `kanpe/cli.py` の HTML/JS を更新し、ボタン押下で提案を取得・表示できるようにする。
 
 ## 4. 検証プラン (Verification Plan)
-- `kuroko worklist` を実行し、Markdown 形式でプロジェクト名、統計、PR/Issue リストが表示されること。
-- `kuroko worklist --json-output` を実行し、有効な JSON が出力されること。
-- リポジトリが設定されていないプロジェクトがある場合、スキップされるか適切な警告が出ること。
+- `pytest` で `kuroko/llm.py` の動作確認（モック使用）。
+- `kanpe --refresh` で起動し、実際に「次の一手を提案」ボタンを押し、アドバイスが表示されることを確認する。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
-- `gh` コマンドへの依存を最小限にし、コマンドの実行失敗時（未ログイン等）にクラッシュしないようエラーハンドリングを徹底すること。
-- 既存の `kuroko status` や `recent` のコードスタイルに合わせること。
+- `kuroko` コアロジックの破壊的変更は行わない。
+- 既存の `Refresh` 機能を壊さないように注意する。
+- 外部ライブラリ（`openai` 等）を追加せず、標準の `urllib` または既存の依存関係で実装する（依存を増やさないため）。

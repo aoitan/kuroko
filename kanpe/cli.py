@@ -1,4 +1,5 @@
 import shlex
+import secrets
 import socketserver
 import subprocess
 import webbrowser
@@ -17,25 +18,74 @@ HTML_TEMPLATE = """<!doctype html>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>kanpe report</title>
     <style>
-      body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; }}
+      body {{ max-width: 900px; margin: 2rem auto; padding: 0 1rem; line-height: 1.7; position: relative; }}
       pre {{ overflow-x: auto; }}
       code {{ white-space: pre-wrap; }}
       table {{ border-collapse: collapse; }}
       th, td {{ padding: 0.4rem 0.6rem; border: 1px solid #ccc; }}
+      .header-actions {{ position: sticky; top: 0; background: #fff; padding: 1rem 0; border-bottom: 1px solid #eee; margin-bottom: 1rem; display: flex; justify-content: flex-end; z-index: 100; }}
+      .btn {{ padding: 0.5rem 1rem; border: 1px solid #007bff; background: #007bff; color: #fff; border-radius: 4px; cursor: pointer; text-decoration: none; font-size: 0.9rem; }}
+      .btn:hover {{ background: #0056b3; }}
+      .btn:active {{ background: #004085; }}
+      .btn.loading {{ opacity: 0.6; pointer-events: none; }}
     </style>
   </head>
   <body>
-    {content}
+    <div class="header-actions">
+      <button id="suggest-btn" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion()">次の一手を提案</button>
+      <form action="/refresh" method="post">
+        <input type="hidden" name="nonce" value="{nonce}">
+        <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
+      </form>
+    </div>
+    <div id="suggestion-box" style="display: none; background: #f8f9fa; border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
+      <strong>LLMの提案:</strong>
+      <div id="suggestion-content" style="white-space: pre-wrap; margin-top: 0.5rem;"></div>
+    </div>
+    <div id="report-content">
+      {content}
+    </div>
+    <script>
+      async function getSuggestion() {{
+        const btn = document.getElementById('suggest-btn');
+        const box = document.getElementById('suggestion-box');
+        const content = document.getElementById('suggestion-content');
+        
+        btn.classList.add('loading');
+        btn.innerText = '考え中...';
+        box.style.display = 'block';
+        content.innerText = 'LLMに問い合わせています...';
+        
+        try {{
+          const response = await fetch('/suggest', {{
+            method: 'POST',
+            body: new URLSearchParams({{ 'nonce': '{nonce}' }})
+          }});
+          if (response.ok) {{
+            const text = await response.text();
+            content.innerText = text;
+          }} else {{
+            const errorText = await response.text();
+            content.innerText = 'エラーが発生しました: ' + errorText;
+          }}
+        }} catch (e) {{
+          content.innerText = '通信エラー: ' + e;
+        }} finally {{
+          btn.classList.remove('loading');
+          btn.innerText = '次の一手を提案';
+        }}
+      }}
+    </script>
   </body>
 </html>
 """
 
 
-class ReusableTCPServer(socketserver.TCPServer):
+class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
 
-def render_markdown_to_html(markdown_text: str) -> str:
+def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
     # md_in_html is required to parse Markdown inside <details> tags
     content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     
@@ -57,13 +107,28 @@ def render_markdown_to_html(markdown_text: str) -> str:
     css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
     
     content = bleach.clean(content_raw, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
-    return HTML_TEMPLATE.format(content=content)
+    return HTML_TEMPLATE.format(content=content, nonce=nonce)
 
 
-def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None:
+def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
     import sys
+    
+    # Auto-detect if current report has worklist to maintain state on refresh
+    auto_include_worklist = include_worklist
+    if not auto_include_worklist and report_path.exists():
+        try:
+            with open(report_path, "r", encoding="utf-8") as f:
+                if "## Worklist" in f.read():
+                    auto_include_worklist = True
+        except Exception:
+            pass
+
     args = shlex.split(kuroko_cmd, posix=(sys.platform != "win32"))
     args.extend(["report", str(report_path)])
+    
+    if auto_include_worklist:
+        args.append("--include-worklist")
+        
     if report_args:
         args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
 
@@ -77,15 +142,54 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str) -> None
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
 @click.option('--report-args', default='', help='Extra args passed to `kuroko report` when --refresh is enabled.')
+@click.option('--include-worklist', is_flag=True, help='Force include worklist in the generated report on refresh.')
 @click.option('--kuroko-cmd', default='kuroko', help='Command name/path used to execute kuroko.')
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
-def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser):
+@click.option('--config', default=None, help='Path to kuroko.config.yaml')
+@click.option(
+    '--allow-remote',
+    is_flag=True,
+    help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
+)
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config, allow_remote):
+    from kuroko.config import load_config
+    kuroko_config = load_config(config)
     report_path = Path(input_file)
+    current_nonce = secrets.token_hex(16)
+
+    # Prevent accidental exposure on non-localhost interfaces unless explicitly allowed.
+    normalized_host = (host or "").strip().lower()
+    is_localhost = (
+        normalized_host == "localhost"
+        or normalized_host == "::1"
+        or normalized_host.startswith("127.")
+    )
+    if not is_localhost and not allow_remote:
+        raise click.ClickException(
+            "Refusing to bind HTTP server to non-localhost host "
+            f"({host!r}) without --allow-remote.\n"
+            "The kanpe web UI exposes /refresh and /suggest endpoints that are only protected by a "
+            "nonce embedded in the HTML. If you bind to a publicly reachable interface, third parties "
+            "can fetch `/`, obtain the nonce, and replay these actions.\n"
+            "Use --allow-remote only on trusted networks and behind appropriate access controls."
+        )
+    if not is_localhost and allow_remote:
+        click.echo(
+            "WARNING: kanpe HTTP server is bound to a non-localhost interface. "
+            "The /refresh and /suggest endpoints are only protected by a nonce that can be obtained "
+            "from GET `/`. Do NOT expose this to untrusted networks.",
+            err=True,
+        )
 
     if refresh:
-        refresh_report(report_path=report_path, kuroko_cmd=kuroko_cmd, report_args=report_args)
+        refresh_report(
+            report_path=report_path,
+            kuroko_cmd=kuroko_cmd,
+            report_args=report_args,
+            include_worklist=include_worklist
+        )
 
     # Always check existence even after refresh
     if not report_path.exists():
@@ -94,22 +198,130 @@ def main(input_file, refresh, report_args, kuroko_cmd, host, port, open_browser)
         )
 
     class Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def _validate_nonce(self) -> bool:
+            """Parses the POST body and validates the nonce against current_nonce. Returns True if valid."""
             try:
-                with open(report_path, 'r', encoding='utf-8') as f:
-                    markdown_text = f.read()
-                html = render_markdown_to_html(markdown_text)
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.end_headers()
-                self.wfile.write(html.encode('utf-8'))
+                # Limit body size for security
+                max_body = 4096
+                content_length = int(self.headers.get('Content-Length', 0))
+                if content_length > max_body:
+                    self.send_response(413) # Request Entity Too Large
+                    self.end_headers()
+                    self.wfile.write(b"Request body too large.")
+                    return False
+                
+                post_data = self.rfile.read(content_length).decode('utf-8')
+                
+                from urllib.parse import parse_qs
+                import hmac
+                params = parse_qs(post_data)
+                nonce_in_post = params.get("nonce", [None])[0]
+
+                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
+                    return True
+                else:
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b"Forbidden: Invalid nonce.")
+                    return False
             except Exception:
-                import traceback
-                traceback.print_exc()
-                self.send_response(500)
-                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.send_response(400)
                 self.end_headers()
-                self.wfile.write(b"Error reading or rendering report.")
+                self.wfile.write(b"Bad Request")
+                return False
+
+        def do_POST(self):
+            if self.path == '/refresh':
+                if not self._validate_nonce():
+                    return
+
+                try:
+                    refresh_report(
+                        report_path=report_path,
+                        kuroko_cmd=kuroko_cmd,
+                        report_args=report_args,
+                        include_worklist=include_worklist
+                    )
+                    self.send_response(303)
+                    self.send_header('Location', '/')
+                    self.end_headers()
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Failed to refresh report.")
+                    return
+
+            if self.path == '/suggest':
+                if not self._validate_nonce():
+                    return
+
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        report_text = f.read()
+                    
+                    # Limit context size to prevent massive requests
+                    max_context_chars = 20000
+                    if len(report_text) > max_context_chars:
+                        report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+
+                    from kuroko.llm import LLMClient
+                    client = LLMClient(kuroko_config.llm)
+                    messages = [
+                        {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
+                        {"role": "user", "content": f"Current status report:\n\n{report_text}"}
+                    ]
+                    suggestion = client.chat_completion(messages)
+                    
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(suggestion.encode('utf-8'))
+                    return
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    # Do not leak internal error details (e.g. LLM URL, file paths) to the client
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
+                    return
+
+            self.send_response(404)
+            self.end_headers()
+
+        def do_GET(self):
+            if self.path == '/':
+                try:
+                    with open(report_path, 'r', encoding='utf-8') as f:
+                        markdown_text = f.read()
+                    html = render_markdown_to_html(markdown_text, current_nonce)
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(html.encode('utf-8'))
+                except Exception:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error reading or rendering report.")
+                return
+
+            if self.path in ['/refresh', '/suggest']:
+                self.send_response(405)
+                self.end_headers()
+                self.wfile.write(b"Method Not Allowed: Use POST.")
+                return
+
+            self.send_response(404)
+            self.end_headers()
+            self.wfile.write(b"Not Found")
 
         def log_message(self, format, *args):
             return

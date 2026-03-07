@@ -15,10 +15,17 @@ class DefaultsConfig(BaseModel):
     filename_glob: str = "*.md"
     max_depth: Optional[int] = None  # None は無制限
 
+class LLMConfig(BaseModel):
+    url: str = "http://localhost:11434/v1"
+    model: str = "llama3"
+    api_key: Optional[str] = None
+    timeout: int = 30
+
 class KurokoConfig(BaseModel):
     version: int = 1
     projects: List[ProjectConfig] = []
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
 
 def find_config() -> Optional[Path]:
     search_paths = [

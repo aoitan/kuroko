@@ -1,6 +1,4 @@
-import pytest
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from kuroko.worklist import fetch_worklist
 
 def test_fetch_worklist_with_totals():
@@ -24,9 +22,13 @@ def test_fetch_worklist_with_totals():
         assert data["total_issues"] == 123
         
         # Verify gh api was called with search query
-        api_calls = [call for call in mock_run.call_args_list if "api" in call.args[0]]
+        api_calls = [c for c in mock_run.call_args_list if "api" in c.args[0]]
         assert len(api_calls) == 2
-        assert "search/issues?q=repo:owner/repo+is:open+is:pr&per_page=1" in api_calls[0].args[0]
+        # Check that the query is passed as a separate argument following -f
+        # cmd = ["gh", "api", "search/issues", "-f", "q=...", "-f", "per_page=1", "--jq", ".total_count"]
+        # So we look for the argument after "-f"
+        combined_args = " ".join(api_calls[0].args[0])
+        assert "q=repo:owner/repo is:open is:pr" in combined_args
 
 def test_fetch_worklist_fallback_on_error():
     # If search fails, it should fallback to list size

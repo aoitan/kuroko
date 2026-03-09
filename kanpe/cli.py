@@ -3,6 +3,8 @@ import secrets
 import socketserver
 import subprocess
 import webbrowser
+import json
+import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -113,8 +115,6 @@ def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
-    import sys
-    
     # Auto-detect if current report has worklist to maintain state on refresh
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
@@ -140,12 +140,47 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None) -> str:
+    """Invokes shinko command and returns the suggestion."""
+    # Resolve shinko command. Default to current python interpreter if it looks like a module path
+    if shinko_cmd == "shinko":
+        # Try to use current python if shinko command might not be in PATH
+        # This is safer for development/venv environments
+        cmd = [sys.executable, "-m", "shinko.cli", "--input-file", str(report_path), "--json-output"]
+    else:
+        cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
+        cmd.extend(["--input-file", str(report_path), "--json-output"])
+
+    if config:
+        cmd.extend(["--config", str(config)])
+        
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("shinko command timed out after 60 seconds.")
+
+    if result.returncode != 0:
+        stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
+        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr_snippet}")
+        
+    try:
+        output_data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        stdout_snippet = (result.stdout[:500] + "...") if len(result.stdout) > 500 else result.stdout
+        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}\nOutput: {stdout_snippet}")
+
+    return output_data.get("suggestion", "")
+
+
 @click.command()
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
 @click.option('--report-args', default='', help='Extra args passed to `kuroko report` when --refresh is enabled.')
 @click.option('--include-worklist', is_flag=True, help='Force include worklist in the generated report on refresh.')
 @click.option('--kuroko-cmd', default='kuroko', help='Command name/path used to execute kuroko.')
+@click.option('--shinko-cmd', default='shinko', help='Command name/path used to execute shinko.')
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
@@ -155,9 +190,7 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
     is_flag=True,
     help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
 )
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config, allow_remote):
-    from kuroko.config import load_config
-    kuroko_config = load_config(config)
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_cmd, host, port, open_browser, config, allow_remote):
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
 
@@ -262,21 +295,8 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                     return
 
                 try:
-                    with open(report_path, 'r', encoding='utf-8') as f:
-                        report_text = f.read()
-                    
-                    # Limit context size to prevent massive requests
-                    max_context_chars = 20000
-                    if len(report_text) > max_context_chars:
-                        report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+                    suggestion = invoke_shinko(shinko_cmd, report_path, config)
 
-                    from kuroko.llm import LLMClient
-                    client = LLMClient(kuroko_config.llm)
-                    messages = [
-                        {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
-                        {"role": "user", "content": f"Current status report:\n\n{report_text}"}
-                    ]
-                    suggestion = client.chat_completion(messages)
                     # Print to console for server-side verification
                     print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")
                     

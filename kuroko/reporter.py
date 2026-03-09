@@ -1,7 +1,7 @@
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import defaultdict
-from kuroko.constants import BLOCK_IGNORE
+from kuroko_core.constants import BLOCK_IGNORE
 from kuroko.worklist import format_total_count
 
 

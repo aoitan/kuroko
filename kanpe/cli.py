@@ -115,8 +115,6 @@ def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
-    import sys
-    
     # Auto-detect if current report has worklist to maintain state on refresh
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
@@ -142,6 +140,40 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None) -> str:
+    """Invokes shinko command and returns the suggestion."""
+    # Resolve shinko command. Default to current python interpreter if it looks like a module path
+    if shinko_cmd == "shinko":
+        # Try to use current python if shinko command might not be in PATH
+        # This is safer for development/venv environments
+        cmd = [sys.executable, "-m", "shinko.cli", "--input-file", str(report_path), "--json-output"]
+    else:
+        cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
+        cmd.extend(["--input-file", str(report_path), "--json-output"])
+
+    if config:
+        cmd.extend(["--config", str(config)])
+        
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("shinko command timed out after 60 seconds.")
+
+    if result.returncode != 0:
+        stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
+        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr_snippet}")
+        
+    try:
+        output_data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        stdout_snippet = (result.stdout[:500] + "...") if len(result.stdout) > 500 else result.stdout
+        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}\nOutput: {stdout_snippet}")
+
+    return output_data.get("suggestion", "")
+
+
 @click.command()
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
@@ -159,8 +191,6 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
     help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
 )
 def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_cmd, host, port, open_browser, config, allow_remote):
-    from kuroko_core.config import load_config
-    kuroko_config = load_config(config)
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
 
@@ -265,36 +295,7 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
                     return
 
                 try:
-                    # Resolve shinko command. Default to current python interpreter if it looks like a module path
-                    if shinko_cmd == "shinko":
-                        # Try to use current python if shinko command might not be in PATH
-                        # This is safer for development/venv environments
-                        cmd = [sys.executable, "-m", "shinko.cli", "--input-file", str(report_path), "--json-output"]
-                    else:
-                        cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
-                        cmd.extend(["--input-file", str(report_path), "--json-output"])
-
-                    if config:
-                        cmd.extend(["--config", str(config)])
-                        
-                    try:
-                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                    except FileNotFoundError:
-                        raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
-                    except subprocess.TimeoutExpired:
-                        raise RuntimeError("shinko command timed out after 60 seconds.")
-
-                    if result.returncode != 0:
-                        stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
-                        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr_snippet}")
-                        
-                    try:
-                        output_data = json.loads(result.stdout)
-                    except json.JSONDecodeError as e:
-                        stdout_snippet = (result.stdout[:500] + "...") if len(result.stdout) > 500 else result.stdout
-                        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}\nOutput: {stdout_snippet}")
-
-                    suggestion = output_data.get("suggestion", "")
+                    suggestion = invoke_shinko(shinko_cmd, report_path, config)
 
                     # Print to console for server-side verification
                     print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")

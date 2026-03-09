@@ -15,11 +15,12 @@ dependencies = [
 ]
 
 [tool.setuptools]
-packages = ["kuroko", "kanpe"]
+packages = ["kuroko", "kanpe", "kuroko_core", "shinko"]
 
 [project.scripts]
 kuroko = "kuroko.cli:main"
 kanpe = "kanpe.cli:main"
+shinko = "shinko.cli:main"
 
 [build-system]
 requires = ["setuptools>=61.0"]

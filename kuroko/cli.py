@@ -3,7 +3,7 @@ import json
 import sys
 from pathlib import Path
 from datetime import datetime
-from kuroko.config import load_config
+from kuroko_core.config import load_config
 from kuroko.collector import collect_checkpoints
 from kuroko.reporter import generate_report
 
@@ -40,7 +40,7 @@ def recent(ctx, n, json_output):
 @click.pass_context
 def blockers(ctx, json_output):
     """Show active blockers."""
-    from kuroko.constants import BLOCK_IGNORE
+    from kuroko_core.constants import BLOCK_IGNORE
     entries = ctx.obj['get_entries']()
     blockers = [e for e in entries if e['block'] and e['block'].strip().lower() not in BLOCK_IGNORE]
     

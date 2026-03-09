@@ -1,7 +1,7 @@
 import json
 import urllib.request
 from typing import List, Dict, Any
-from kuroko.config import LLMConfig
+from kuroko_core.config import LLMConfig
 
 class LLMClient:
     def __init__(self, config: LLMConfig):

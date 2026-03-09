@@ -3,7 +3,7 @@ import glob
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
-from kuroko.config import KurokoConfig
+from kuroko_core.config import KurokoConfig
 from kuroko.parser import parse_checkpoint_file
 
 def collect_checkpoints(

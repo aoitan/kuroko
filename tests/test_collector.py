@@ -1,7 +1,7 @@
 import pytest
 from datetime import datetime
 from kuroko.collector import collect_checkpoints
-from kuroko.config import KurokoConfig, ProjectConfig, DefaultsConfig
+from kuroko_core.config import KurokoConfig, ProjectConfig, DefaultsConfig
 
 # tmp_path フィクスチャを使ってテスト用ディレクトリを作る。
 @pytest.fixture

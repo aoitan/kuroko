@@ -38,6 +38,24 @@ def test_invoke_shinko_custom_cmd():
         assert args[0][0] == "/usr/local/bin/shinko"
         assert "--some-opt" in args[0]
 
+def test_invoke_shinko_with_mode_and_project():
+    report_path = Path("report.md")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"suggestion": "Targeted suggestion"}),
+            stderr=""
+        )
+        
+        suggestion = invoke_shinko("shinko", report_path, mode="rescue", project="kuroko")
+        assert suggestion == "Targeted suggestion"
+        
+        args, kwargs = mock_run.call_args
+        assert "--mode" in args[0]
+        assert "rescue" in args[0]
+        assert "--project" in args[0]
+        assert "kuroko" in args[0]
+
 def test_invoke_shinko_file_not_found():
     report_path = Path("report.md")
     with patch("subprocess.run", side_effect=FileNotFoundError):

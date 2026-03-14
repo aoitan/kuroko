@@ -34,10 +34,18 @@ HTML_TEMPLATE = """<!doctype html>
   </head>
   <body>
     <div class="header-actions">
-      <button id="suggest-btn" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion()">次の一手を提案</button>
-      <form action="/refresh" method="post">
+      <div style="margin-right: 1rem; display: flex; align-items: center;">
+        <label for="project-select" style="font-size: 0.85rem; margin-right: 0.5rem; color: #666;">対象:</label>
+        <select id="project-select" style="padding: 0.4rem; border-radius: 4px; border: 1px solid #ccc; font-size: 0.9rem;">
+          <option value="">(全体)</option>
+        </select>
+      </div>
+      <button id="suggest-btn-normal" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion('normal')">🚀 通常</button>
+      <button id="suggest-btn-rescue" class="btn" style="background: #ffc107; border-color: #ffc107; color: #000; margin-right: 0.5rem;" onclick="getSuggestion('rescue')">🧹 保守救済</button>
+      <button id="suggest-btn-deep" class="btn" style="background: #007bff; border-color: #007bff; margin-right: 0.5rem;" onclick="getSuggestion('deep')">🔍 深掘り</button>
+      <form action="/refresh" method="post" style="display: inline;">
         <input type="hidden" name="nonce" value="{nonce}">
-        <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
+        <button type="submit" id="refresh-btn" class="btn" style="background: #6c757d; border-color: #6c757d;" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
       </form>
     </div>
     <div id="suggestion-box" style="display: none; background: #f8f9fa; border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
@@ -48,20 +56,54 @@ HTML_TEMPLATE = """<!doctype html>
       {content}
     </div>
     <script>
-      async function getSuggestion() {{
-        const btn = document.getElementById('suggest-btn');
+      // Initialize project select from Status table
+      (function() {{
+        const projects = new Set();
+        // Assume Status table is the first table
+        const table = document.querySelector('#report-content table');
+        if (table) {{
+          const rows = table.querySelectorAll('tbody tr');
+          rows.forEach(row => {{
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 4) {{
+              const project = cells[3].innerText.trim();
+              if (project && project !== '-') {{
+                projects.add(project);
+              }}
+            }}
+          }});
+        }}
+        const select = document.getElementById('project-select');
+        Array.from(projects).sort().forEach(project => {{
+          const option = document.createElement('option');
+          option.value = project;
+          option.innerText = project;
+          select.appendChild(option);
+        }});
+      }})();
+
+      async function getSuggestion(mode) {{
+        const btns = [
+          document.getElementById('suggest-btn-normal'),
+          document.getElementById('suggest-btn-rescue'),
+          document.getElementById('suggest-btn-deep')
+        ];
         const box = document.getElementById('suggestion-box');
         const content = document.getElementById('suggestion-content');
+        const project = document.getElementById('project-select').value;
         
-        btn.classList.add('loading');
-        btn.innerText = '考え中...';
+        btns.forEach(b => b.classList.add('loading'));
         box.style.display = 'block';
-        content.innerText = 'LLMに問い合わせています...';
+        content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ')';
         
         try {{
           const response = await fetch('/suggest', {{
             method: 'POST',
-            body: new URLSearchParams({{ 'nonce': '{nonce}' }})
+            body: new URLSearchParams({{ 
+              'nonce': '{nonce}',
+              'mode': mode,
+              'project': project
+            }})
           }});
           if (response.ok) {{
             const html = await response.text();
@@ -73,8 +115,7 @@ HTML_TEMPLATE = """<!doctype html>
         }} catch (e) {{
           content.innerText = '通信エラー: ' + e;
         }} finally {{
-          btn.classList.remove('loading');
-          btn.innerText = '次の一手を提案';
+          btns.forEach(b => b.classList.remove('loading'));
         }}
       }}
     </script>
@@ -140,7 +181,7 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 
-def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None) -> str:
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None) -> str:
     """Invokes shinko command and returns the suggestion."""
     # Resolve shinko command. Default to current python interpreter if it looks like a module path
     if shinko_cmd == "shinko":
@@ -153,6 +194,12 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None) -> str
 
     if config:
         cmd.extend(["--config", str(config)])
+
+    if mode:
+        cmd.extend(["--mode", mode])
+    
+    if project:
+        cmd.extend(["--project", project])
         
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -233,36 +280,38 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
         )
 
     class Handler(BaseHTTPRequestHandler):
-        def _validate_nonce(self) -> bool:
-            """Parses the POST body and validates the nonce against current_nonce. Returns True if valid."""
+        def _get_post_params(self) -> dict:
+            """Parses the POST body and returns params dict. Caches the result."""
+            if hasattr(self, "_post_params"):
+                return self._post_params
+            
             try:
-                # Limit body size for security
                 max_body = 4096
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length > max_body:
-                    self.send_response(413) # Request Entity Too Large
-                    self.end_headers()
-                    self.wfile.write(b"Request body too large.")
-                    return False
+                    self._post_params = {}
+                    return {}
                 
                 post_data = self.rfile.read(content_length).decode('utf-8')
-                
                 from urllib.parse import parse_qs
-                import hmac
-                params = parse_qs(post_data)
-                nonce_in_post = params.get("nonce", [None])[0]
-
-                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                    return True
-                else:
-                    self.send_response(403)
-                    self.end_headers()
-                    self.wfile.write(b"Forbidden: Invalid nonce.")
-                    return False
+                self._post_params = {k: v[0] for k, v in parse_qs(post_data).items()}
+                return self._post_params
             except Exception:
-                self.send_response(400)
+                self._post_params = {}
+                return {}
+
+        def _validate_nonce(self) -> bool:
+            """Validates the nonce against current_nonce. Returns True if valid."""
+            params = self._get_post_params()
+            nonce_in_post = params.get("nonce")
+
+            import hmac
+            if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
+                return True
+            else:
+                self.send_response(403)
                 self.end_headers()
-                self.wfile.write(b"Bad Request")
+                self.wfile.write(b"Forbidden: Invalid nonce.")
                 return False
 
         def do_POST(self):
@@ -294,8 +343,12 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
                 if not self._validate_nonce():
                     return
 
+                params = self._get_post_params()
+                mode = params.get("mode")
+                project = params.get("project")
+
                 try:
-                    suggestion = invoke_shinko(shinko_cmd, report_path, config)
+                    suggestion = invoke_shinko(shinko_cmd, report_path, config, mode=mode, project=project)
 
                     # Print to console for server-side verification
                     print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")

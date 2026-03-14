@@ -1,57 +1,47 @@
-# Implementation Plan: Extract `shinko` command and Refactor Architecture
+# Implementation Plan: llm提案機能に温度感を足す (kanpeの次の一手を提案ボタンを3種類に分ける)
 
 ## 1. 概要とゴール (Summary & Goal)
-- **Must**: LLM インサイト機能を `kuroko` から独立した `shinko` コマンドに分離する。
-- **Must**: 共通の定数・設定ロジックを `kuroko_core` パッケージに抽出する。
-- **Must**: `kanpe` から `shinko` を CLI 経由で呼び出すようにし、コード上の直接的な依存を排除する。
-- **Want**: `shinko` の出力を JSON で受け取り、`kanpe` UI でパースして表示する。
+- **Must**: kanpeのWeb UIにある「次の一手を提案」機能を、ユーザーの状況に合わせた3つのモード（通常推薦、保守救済推薦、深掘り推薦）で実行できるようにする。
+- **Must**: 対象とするプロジェクトを画面上のStatus表から抽出し、指定できるようにする。
+- **Want**: 特になし（今回は必須要件のみに集中する）。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- **`kuroko_core/` (新規)**: `config.py`, `constants.py` を作成し、共通の設定・定数ロジックを移動。
-- **`shinko/` (新規)**: `cli.py`, `llm.py` を作成し、LLM インサイト生成機能を実装。
-- **`kuroko/` (修正)**: `shinko` サブコマンドを削除し、`kuroko_core` を参照するように修正。
-- **`kanpe/` (修正)**: `LLMClient` への依存を削除。`/suggest` エンドポイントで `shinko` コマンドを実行するように変更。
-- **`pyproject.toml` (修正)**: `kuroko_core` パッケージの追加と `shinko` エントリポイントの登録。
+- **`shinko/cli.py`**:
+    - `--mode` オプション（`normal`, `rescue`, `deep`）の追加。
+    - `--project` オプションの追加。
+    - `mode` および `project` の指定に応じたシステムプロンプトの出し分けロジックの実装。
+- **`kanpe/cli.py`**:
+    - Webサーバーの `/suggest` エンドポイントで `mode` と `project` パラメータを受け取る。
+    - `invoke_shinko` 関数を修正し、受け取ったパラメータを `shinko` コマンド呼び出し時に渡す。
+    - HTMLテンプレート（`HTML_TEMPLATE`）内のUI修正：
+        - レポート内のテーブルからプロジェクト名を抽出し、プルダウンリストに設定するJavaScriptの追加。
+        - 既存の「次の一手を提案」ボタンを廃止し、3種類のボタン（「🚀 通常」、「🧹 保守救済」、「🔍 深掘り」）とプロジェクト選択プルダウンを配置する。
+        - `getSuggestion(mode)` 関数に修正し、選択されたプロジェクトとモードを POST パラメータとして送信する。
+- **テストの追加・修正**:
+    - `tests/test_kanpe_shinko_invocation.py` や `tests/test_kanpe_refresh.py` などの関連テストを、今回の引数追加・UI変更に合わせて更新する。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
-- **新機能の追加**: LLM プロンプトの改善や新しいインサイト機能の追加は行わない。
-- **UI の大幅な変更**: `kanpe` のデザイン変更などは行わない。
-- **外部依存の追加**: 既存のライブラリ（`click`, `pydantic`, `yaml` 等）の範囲内で実装する。
+- **リファクタリング**: 今回の変更に関係のない箇所のコード整理は行わない。
+- **追加機能**: LLMへのプロンプト以外の、`shinko` の根本的なLLM呼び出しロジックの変更。
+- **依存関係**: 新しいライブラリの追加は行わない。
 
 ## 3. 実装ステップ (Implementation Steps)
-
-1. [ ] **Step 1: `kuroko_core` パッケージの作成と移行**
-   - `kuroko_core/` ディレクトリと `__init__.py` を作成。
-   - `kuroko/config.py` と `kuroko/constants.py` を `kuroko_core/` へ移動。
-   - `kuroko/` および `kanpe/` 内のインポート文を `kuroko_core` を参照するように一括置換。
-   - *Validation*: `kuroko --help`, `kanpe --help` が正常に動作すること。
-
-2. [ ] **Step 2: `shinko` パッケージの作成と機能移譲**
-   - `shinko/` ディレクトリと `__init__.py` を作成。
-   - `kuroko/llm.py` を `shinko/llm.py` に移動し、`kuroko_core` を参照するように修正。
-   - `shinko/cli.py` を新規作成し、`kuroko/cli.py` の `shinko` サブコマンドの内容を移植（独立した `main` コマンドとして定義）。
-   - `pyproject.toml` に `shinko = "shinko.cli:main"` を追加。
-   - *Validation*: `pip install -e .` 後、`shinko --help` が動作すること。
-
-3. [ ] **Step 3: `kuroko` からの LLM 依存排除**
-   - `kuroko/cli.py` から `shinko` サブコマンド定義を削除。
-   - 不要になった `kuroko/llm.py` を削除。
-   - *Validation*: `kuroko` コマンドに `shinko` サブコマンドが表示されないこと。
-
-4. [ ] **Step 4: `kanpe` の修正（疎結合化）**
-   - `kanpe/cli.py` から `LLMClient` のインポートと直接使用を削除。
-   - `/suggest` ハンドラ内で `subprocess.run(["shinko", "--input-file", report_path, "--json-output"], ...)` を実行し、結果の JSON をパースしてレスポンスを生成するように変更。
-   - *Validation*: `kanpe` 画面から「次の一手を提案」をクリックし、従来通り提案が表示されること。
+1.  [ ] **Step 1**: `shinko/cli.py` の拡張
+    - *Action*: `--mode` と `--project` 引数を追加。モードとプロジェクトに応じて `messages` の `system` コンテンツを動的に生成する。
+2.  [ ] **Step 2**: `kanpe/cli.py` のサーバーサイド拡張
+    - *Action*: `invoke_shinko` に `mode` と `project` 引数を追加。`/suggest` の `do_POST` で `parse_qs` を使ってパラメータを取得し渡すようにする。
+3.  [ ] **Step 3**: `kanpe/cli.py` のフロントエンド（HTML/JS）拡張
+    - *Action*: `HTML_TEMPLATE` を修正。テーブルからプロジェクト名を抽出し `<select>` に追加する初期化スクリプトを追加。ボタンを3つに増やし、`getSuggestion('normal')` のように呼ぶよう変更。
+4.  [ ] **Step 4**: テストの更新
+    - *Action*: 変更に合わせた既存テストの修正。`uv run pytest` を実行し、全てパスすることを確認。
 
 ## 4. 検証プラン (Verification Plan)
-- **単体テスト**: `tests/` 内の既存テストがすべて通ること。
-- **結合テスト**:
-  1. `kuroko report` でレポートを作成。
-  2. `shinko --input-file report.md` でインサイトが表示されることを確認。
-  3. `kanpe` を起動し、ブラウザ上で提案機能が動作することを確認。
+- `uv run pytest` が全て通ること。
+- 手動確認: `kuroko report` を生成後、`kanpe` を起動。
+    - プルダウンにテーブル内のプロジェクト（例: `kuroko`, `shinko` など）が表示されるか。
+    - 3つのボタンをそれぞれクリックし、意図したモードとプロジェクトで提案が取得でき、画面に表示されるか。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
-- 各コマンド (`kuroko`, `shinko`, `kanpe`) は、お互いの内部コードをインポートしてはならない。
-- 共有すべきは `kuroko_core` のみとする。
-- 設定ファイル `kuroko.config.yaml` の読み込みロジックは `kuroko_core` に集約し、各コマンドで一貫した設定を利用できるようにする。
+- 既存のロジックを変更する場合は、必ずコメントで理由を残すこと。
+- この計画に含まれないファイルの変更は禁止する。

@@ -20,18 +20,3 @@ def run_kanpe_server(tmp_path):
 # Instead of full server integration test which is flaky in CI, 
 # let's mock the Handler or test the logic directly if possible.
 # Since Handler is local to main(), we can't easily import it.
-
-# Let's add a test for LLMClient's error handling since we changed it.
-from kuroko.llm import LLMClient
-from kuroko.config import LLMConfig
-from unittest.mock import patch, MagicMock
-
-def test_llm_client_raises_on_error():
-    config = LLMConfig(url="http://localhost:11434/v1")
-    client = LLMClient(config)
-    
-    with patch("urllib.request.urlopen") as mock_urlopen:
-        mock_urlopen.side_effect = Exception("API Down")
-        with pytest.raises(RuntimeError) as excinfo:
-            client.chat_completion([{"role": "user", "content": "hi"}])
-        assert "Error connecting to or parsing LLM API: API Down" in str(excinfo.value)

@@ -1,4 +1,4 @@
-from kuroko.config import ProjectConfig, KurokoConfig
+from kuroko_core.config import ProjectConfig, KurokoConfig
 
 def test_project_config_has_repo():
     p = ProjectConfig(name="test", root="/tmp", repo="owner/repo")
@@ -17,6 +17,6 @@ projects:
     root: /path/to/my-project
     repo: aoitan/kuroko
 """)
-    from kuroko.config import load_config
+    from kuroko_core.config import load_config
     cfg = load_config(str(config_file))
     assert cfg.projects[0].repo == "aoitan/kuroko"

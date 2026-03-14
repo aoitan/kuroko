@@ -1,8 +1,8 @@
 import json
 import unittest
 from unittest.mock import patch, MagicMock
-from kuroko.config import LLMConfig
-from kuroko.llm import LLMClient
+from kuroko_core.config import LLMConfig
+from shinko.llm import LLMClient
 
 class TestLLMClient(unittest.TestCase):
     def setUp(self):

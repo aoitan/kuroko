@@ -3,6 +3,8 @@ import secrets
 import socketserver
 import subprocess
 import webbrowser
+import json
+import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -32,10 +34,18 @@ HTML_TEMPLATE = """<!doctype html>
   </head>
   <body>
     <div class="header-actions">
-      <button id="suggest-btn" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion()">次の一手を提案</button>
-      <form action="/refresh" method="post">
+      <div style="margin-right: 1rem; display: flex; align-items: center;">
+        <label for="project-select" style="font-size: 0.85rem; margin-right: 0.5rem; color: #666;">対象:</label>
+        <select id="project-select" style="padding: 0.4rem; border-radius: 4px; border: 1px solid #ccc; font-size: 0.9rem;">
+          <option value="">(全体)</option>
+        </select>
+      </div>
+      <button id="suggest-btn-normal" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion('normal')">🚀 通常</button>
+      <button id="suggest-btn-rescue" class="btn" style="background: #ffc107; border-color: #ffc107; color: #000; margin-right: 0.5rem;" onclick="getSuggestion('rescue')">🧹 保守救済</button>
+      <button id="suggest-btn-deep" class="btn" style="background: #007bff; border-color: #007bff; margin-right: 0.5rem;" onclick="getSuggestion('deep')">🔍 深掘り</button>
+      <form action="/refresh" method="post" style="display: inline;">
         <input type="hidden" name="nonce" value="{nonce}">
-        <button type="submit" id="refresh-btn" class="btn" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
+        <button type="submit" id="refresh-btn" class="btn" style="background: #6c757d; border-color: #6c757d;" onclick="this.classList.add('loading'); this.innerText='Refreshing...';">Refresh & Reload</button>
       </form>
     </div>
     <div id="suggestion-box" style="display: none; background: #f8f9fa; border: 1px solid #ddd; padding: 1rem; margin-bottom: 1rem; border-radius: 4px;">
@@ -46,20 +56,54 @@ HTML_TEMPLATE = """<!doctype html>
       {content}
     </div>
     <script>
-      async function getSuggestion() {{
-        const btn = document.getElementById('suggest-btn');
+      // Initialize project select from Status table
+      (function() {{
+        const projects = new Set();
+        // Assume Status table is the first table
+        const table = document.querySelector('#report-content table');
+        if (table) {{
+          const rows = table.querySelectorAll('tbody tr');
+          rows.forEach(row => {{
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 4) {{
+              const project = cells[3].innerText.trim();
+              if (project && project !== '-') {{
+                projects.add(project);
+              }}
+            }}
+          }});
+        }}
+        const select = document.getElementById('project-select');
+        Array.from(projects).sort().forEach(project => {{
+          const option = document.createElement('option');
+          option.value = project;
+          option.innerText = project;
+          select.appendChild(option);
+        }});
+      }})();
+
+      async function getSuggestion(mode) {{
+        const btns = [
+          document.getElementById('suggest-btn-normal'),
+          document.getElementById('suggest-btn-rescue'),
+          document.getElementById('suggest-btn-deep')
+        ];
         const box = document.getElementById('suggestion-box');
         const content = document.getElementById('suggestion-content');
+        const project = document.getElementById('project-select').value;
         
-        btn.classList.add('loading');
-        btn.innerText = '考え中...';
+        btns.forEach(b => b.classList.add('loading'));
         box.style.display = 'block';
-        content.innerText = 'LLMに問い合わせています...';
+        content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ')';
         
         try {{
           const response = await fetch('/suggest', {{
             method: 'POST',
-            body: new URLSearchParams({{ 'nonce': '{nonce}' }})
+            body: new URLSearchParams({{ 
+              'nonce': '{nonce}',
+              'mode': mode,
+              'project': project
+            }})
           }});
           if (response.ok) {{
             const html = await response.text();
@@ -71,8 +115,7 @@ HTML_TEMPLATE = """<!doctype html>
         }} catch (e) {{
           content.innerText = '通信エラー: ' + e;
         }} finally {{
-          btn.classList.remove('loading');
-          btn.innerText = '次の一手を提案';
+          btns.forEach(b => b.classList.remove('loading'));
         }}
       }}
     </script>
@@ -113,8 +156,6 @@ def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
 
 
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
-    import sys
-    
     # Auto-detect if current report has worklist to maintain state on refresh
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
@@ -140,12 +181,53 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None) -> str:
+    """Invokes shinko command and returns the suggestion."""
+    # Resolve shinko command. Default to current python interpreter if it looks like a module path
+    if shinko_cmd == "shinko":
+        # Try to use current python if shinko command might not be in PATH
+        # This is safer for development/venv environments
+        cmd = [sys.executable, "-m", "shinko.cli", "--input-file", str(report_path), "--json-output"]
+    else:
+        cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
+        cmd.extend(["--input-file", str(report_path), "--json-output"])
+
+    if config:
+        cmd.extend(["--config", str(config)])
+
+    if mode:
+        cmd.extend(["--mode", mode])
+    
+    if project:
+        cmd.extend(["--project", project])
+        
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except FileNotFoundError:
+        raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("shinko command timed out after 60 seconds.")
+
+    if result.returncode != 0:
+        stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
+        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr_snippet}")
+        
+    try:
+        output_data = json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        stdout_snippet = (result.stdout[:500] + "...") if len(result.stdout) > 500 else result.stdout
+        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}\nOutput: {stdout_snippet}")
+
+    return output_data.get("suggestion", "")
+
+
 @click.command()
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
 @click.option('--report-args', default='', help='Extra args passed to `kuroko report` when --refresh is enabled.')
 @click.option('--include-worklist', is_flag=True, help='Force include worklist in the generated report on refresh.')
 @click.option('--kuroko-cmd', default='kuroko', help='Command name/path used to execute kuroko.')
+@click.option('--shinko-cmd', default='shinko', help='Command name/path used to execute shinko.')
 @click.option('--host', default='127.0.0.1', help='Host to bind web server.')
 @click.option('--port', default=8765, type=int, help='Port to bind web server.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
@@ -155,9 +237,7 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
     is_flag=True,
     help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
 )
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, port, open_browser, config, allow_remote):
-    from kuroko.config import load_config
-    kuroko_config = load_config(config)
+def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_cmd, host, port, open_browser, config, allow_remote):
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
 
@@ -200,36 +280,38 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
         )
 
     class Handler(BaseHTTPRequestHandler):
-        def _validate_nonce(self) -> bool:
-            """Parses the POST body and validates the nonce against current_nonce. Returns True if valid."""
+        def _get_post_params(self) -> dict:
+            """Parses the POST body and returns params dict. Caches the result."""
+            if hasattr(self, "_post_params"):
+                return self._post_params
+            
             try:
-                # Limit body size for security
                 max_body = 4096
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length > max_body:
-                    self.send_response(413) # Request Entity Too Large
-                    self.end_headers()
-                    self.wfile.write(b"Request body too large.")
-                    return False
+                    self._post_params = {}
+                    return {}
                 
                 post_data = self.rfile.read(content_length).decode('utf-8')
-                
                 from urllib.parse import parse_qs
-                import hmac
-                params = parse_qs(post_data)
-                nonce_in_post = params.get("nonce", [None])[0]
-
-                if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                    return True
-                else:
-                    self.send_response(403)
-                    self.end_headers()
-                    self.wfile.write(b"Forbidden: Invalid nonce.")
-                    return False
+                self._post_params = {k: v[0] for k, v in parse_qs(post_data).items()}
+                return self._post_params
             except Exception:
-                self.send_response(400)
+                self._post_params = {}
+                return {}
+
+        def _validate_nonce(self) -> bool:
+            """Validates the nonce against current_nonce. Returns True if valid."""
+            params = self._get_post_params()
+            nonce_in_post = params.get("nonce")
+
+            import hmac
+            if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
+                return True
+            else:
+                self.send_response(403)
                 self.end_headers()
-                self.wfile.write(b"Bad Request")
+                self.wfile.write(b"Forbidden: Invalid nonce.")
                 return False
 
         def do_POST(self):
@@ -261,22 +343,13 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, host, p
                 if not self._validate_nonce():
                     return
 
-                try:
-                    with open(report_path, 'r', encoding='utf-8') as f:
-                        report_text = f.read()
-                    
-                    # Limit context size to prevent massive requests
-                    max_context_chars = 20000
-                    if len(report_text) > max_context_chars:
-                        report_text = report_text[:max_context_chars] + "\n\n(Truncated for LLM context...)"
+                params = self._get_post_params()
+                mode = params.get("mode")
+                project = params.get("project")
 
-                    from kuroko.llm import LLMClient
-                    client = LLMClient(kuroko_config.llm)
-                    messages = [
-                        {"role": "system", "content": "You are an expert developer assistant. Based on the project status report, suggest the single most important next step to take. Answer in Japanese."},
-                        {"role": "user", "content": f"Current status report:\n\n{report_text}"}
-                    ]
-                    suggestion = client.chat_completion(messages)
+                try:
+                    suggestion = invoke_shinko(shinko_cmd, report_path, config, mode=mode, project=project)
+
                     # Print to console for server-side verification
                     print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")
                     

@@ -1,47 +1,48 @@
-# Implementation Plan: llm提案機能に温度感を足す (kanpeの次の一手を提案ボタンを3種類に分ける)
+# Implementation Plan: 注目プロジェクトの記録とLLMインサイトへの活用 (秘書コンテキスト機能)
 
 ## 1. 概要とゴール (Summary & Goal)
-- **Must**: kanpeのWeb UIにある「次の一手を提案」機能を、ユーザーの状況に合わせた3つのモード（通常推薦、保守救済推薦、深掘り推薦）で実行できるようにする。
-- **Must**: 対象とするプロジェクトを画面上のStatus表から抽出し、指定できるようにする。
-- **Want**: 特になし（今回は必須要件のみに集中する）。
+- **Must**: kanpe の提案（/suggest）実行時に、対象プロジェクトやモード、タイムスタンプ、リポジトリ情報を履歴として記録する。
+- **Must**: 履歴の保存先を `~/.config/kuroko/history.jsonl` とし、設定ファイル（kuroko.config.yaml）で変更可能にする。
+- **Must**: shinko 実行時に直近の履歴から作業傾向を要約し、LLMへのプロンプトに「秘書からのコンテキスト」として注入する。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- **`shinko/cli.py`**:
-    - `--mode` オプション（`normal`, `rescue`, `deep`）の追加。
-    - `--project` オプションの追加。
-    - `mode` および `project` の指定に応じたシステムプロンプトの出し分けロジックの実装。
+- **`kuroko_core/config.py`**:
+    - `KurokoConfig` に `history_path` フィールドを追加（デフォルト: `~/.config/kuroko/history.jsonl`）。
+- **`kuroko_core/history.py` (新規)**:
+    - `HistoryLogger`: イベント（timestamp, repo_root, project, mode）を JSONL 形式で追記保存する。
+    - `HistorySummarizer`: 履歴ファイルを読み込み、直近 N 件の統計（プロジェクト頻度、モード傾向）をプロンプト用テキストに変換する。
 - **`kanpe/cli.py`**:
-    - Webサーバーの `/suggest` エンドポイントで `mode` と `project` パラメータを受け取る。
-    - `invoke_shinko` 関数を修正し、受け取ったパラメータを `shinko` コマンド呼び出し時に渡す。
-    - HTMLテンプレート（`HTML_TEMPLATE`）内のUI修正：
-        - レポート内のテーブルからプロジェクト名を抽出し、プルダウンリストに設定するJavaScriptの追加。
-        - 既存の「次の一手を提案」ボタンを廃止し、3種類のボタン（「🚀 通常」、「🧹 保守救済」、「🔍 深掘り」）とプロジェクト選択プルダウンを配置する。
-        - `getSuggestion(mode)` 関数に修正し、選択されたプロジェクトとモードを POST パラメータとして送信する。
-- **テストの追加・修正**:
-    - `tests/test_kanpe_shinko_invocation.py` や `tests/test_kanpe_refresh.py` などの関連テストを、今回の引数追加・UI変更に合わせて更新する。
+    - `/suggest` エンドポイント成功時に `HistoryLogger` を呼び出して記録する。
+- **`shinko/cli.py`**:
+    - インサイト生成前に `HistorySummarizer` を実行し、LLMのプロンプトにコンテキストを挿入する。
+- **テストの追加**:
+    - 履歴の記録、読み込み、要約ロジックの単体テストを追加。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
-- **リファクタリング**: 今回の変更に関係のない箇所のコード整理は行わない。
-- **追加機能**: LLMへのプロンプト以外の、`shinko` の根本的なLLM呼び出しロジックの変更。
-- **依存関係**: 新しいライブラリの追加は行わない。
+- **履歴の可視化 (UI)**: 今回はプロンプト注入のみとし、Web UI上でのグラフ表示などは行わない。
+- **高度な解析**: 単純な頻度統計に留め、複雑な機械学習等による解析は行わない。
+- **履歴の削除/編集機能**: 今回は追記のみとする。
 
 ## 3. 実装ステップ (Implementation Steps)
-1.  [ ] **Step 1**: `shinko/cli.py` の拡張
-    - *Action*: `--mode` と `--project` 引数を追加。モードとプロジェクトに応じて `messages` の `system` コンテンツを動的に生成する。
-2.  [ ] **Step 2**: `kanpe/cli.py` のサーバーサイド拡張
-    - *Action*: `invoke_shinko` に `mode` と `project` 引数を追加。`/suggest` の `do_POST` で `parse_qs` を使ってパラメータを取得し渡すようにする。
-3.  [ ] **Step 3**: `kanpe/cli.py` のフロントエンド（HTML/JS）拡張
-    - *Action*: `HTML_TEMPLATE` を修正。テーブルからプロジェクト名を抽出し `<select>` に追加する初期化スクリプトを追加。ボタンを3つに増やし、`getSuggestion('normal')` のように呼ぶよう変更。
-4.  [ ] **Step 4**: テストの更新
-    - *Action*: 変更に合わせた既存テストの修正。`uv run pytest` を実行し、全てパスすることを確認。
+1.  [ ] **Step 1: `kuroko_core` の基盤整備**
+    - *Action*: `config.py` 修正。`history.py` 新規作成。
+    - *Validation*: `tests/test_history.py` を作成し、正しいパスへの保存と要約生成を確認。
+2.  [ ] **Step 2: `kanpe` での記録実装**
+    - *Action*: `/suggest` ハンドラ内に `HistoryLogger.log_event()` を組み込む。
+    - *Validation*: 実際に提案を実行し、履歴ファイルが正しく生成されるか確認。
+3.  [ ] **Step 3: `shinko` でのコンテキスト注入**
+    - *Action*: プロンプト生成前に履歴を読み込み、`system` プロンプトの冒頭に「ユーザーの最近の傾向」として挿入。
+    - *Validation*: LLMへのリクエスト内容（サーバーログ等）に履歴情報が含まれていることを確認。
 
 ## 4. 検証プラン (Verification Plan)
 - `uv run pytest` が全て通ること。
-- 手動確認: `kuroko report` を生成後、`kanpe` を起動。
-    - プルダウンにテーブル内のプロジェクト（例: `kuroko`, `shinko` など）が表示されるか。
-    - 3つのボタンをそれぞれクリックし、意図したモードとプロジェクトで提案が取得でき、画面に表示されるか。
+- 手動確認:
+    1. `kanpe` で「🚀 通常」ボタンを押す（複数回）。
+    2. `history.jsonl` に正しく行が追加されているか確認。
+    3. `shinko` を実行し、提案内容に「最近の傾向を踏まえた」アドバイスが含まれるか（またはプロンプトに含まれているか）を確認。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
-- 既存のロジックを変更する場合は、必ずコメントで理由を残すこと。
-- この計画に含まれないファイルの変更は禁止する。
+- 既存のテストを壊さないこと。
+- パス解決（`~` や相対パス）は `os.path.expanduser` や `Path.resolve()` を適切に使用すること。
+- JSONLの読み書き時は、ファイルが存在しない場合や空の場合を適切にハンドリングすること。

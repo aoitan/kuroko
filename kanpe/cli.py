@@ -5,12 +5,14 @@ import subprocess
 import webbrowser
 import json
 import sys
+import os
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import click
 import bleach
 from markdown import markdown
+from kuroko_core.history import HistoryLogger, get_repo_root
 
 
 HTML_TEMPLATE = """<!doctype html>
@@ -181,7 +183,7 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 
-def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None) -> str:
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, timeout: int = 60) -> str:
     """Invokes shinko command and returns the suggestion."""
     # Resolve shinko command. Default to current python interpreter if it looks like a module path
     if shinko_cmd == "shinko":
@@ -202,11 +204,11 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         cmd.extend(["--project", project])
         
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
     except subprocess.TimeoutExpired:
-        raise RuntimeError("shinko command timed out after 60 seconds.")
+        raise RuntimeError(f"shinko command timed out after {timeout} seconds.")
 
     if result.returncode != 0:
         stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
@@ -289,8 +291,8 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
                 max_body = 4096
                 content_length = int(self.headers.get('Content-Length', 0))
                 if content_length > max_body:
-                    self._post_params = {}
-                    return {}
+                    self._post_params = None
+                    return None
                 
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 from urllib.parse import parse_qs
@@ -303,6 +305,12 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
         def _validate_nonce(self) -> bool:
             """Validates the nonce against current_nonce. Returns True if valid."""
             params = self._get_post_params()
+            if params is None:
+                self.send_response(413) # Request Entity Too Large
+                self.end_headers()
+                self.wfile.write(b"Request body too large.")
+                return False
+                
             nonce_in_post = params.get("nonce")
 
             import hmac
@@ -344,12 +352,55 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
                     return
 
                 params = self._get_post_params()
+                if params is None:
+                    return
+
                 mode = params.get("mode")
                 project = params.get("project")
+                
+                # Strict mode validation
+                if mode and mode not in ('normal', 'rescue', 'deep'):
+                    self.send_response(400)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Bad Request: Invalid mode.")
+                    return
+
+                # Strict project sanitization (alphanumeric, dash, underscore only) to prevent stored prompt injection
+                if project:
+                    import re
+                    project = re.sub(r'[^a-zA-Z0-9_\-]', '', project)[:64]
+                    if not project:
+                        project = None
+
+                from kuroko_core.config import load_config
+                cfg = load_config(config)
 
                 try:
-                    suggestion = invoke_shinko(shinko_cmd, report_path, config, mode=mode, project=project)
+                    shinko_timeout = cfg.llm.timeout + 10
+                    suggestion = invoke_shinko(shinko_cmd, report_path, config, mode=mode, project=project, timeout=shinko_timeout)
+                except Exception as exc:
+                    import traceback
+                    traceback.print_exc()
+                    self.send_response(500)
+                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                    self.end_headers()
+                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
+                    return
 
+                # Log the event in a separate block so failure doesn't cause a 500 error
+                try:
+                    logger = HistoryLogger(cfg.history_path)
+                    logger.log_event(
+                        repo_root=get_repo_root(report_path),
+                        target_project=project,
+                        mode=mode or "normal",
+                        action="suggest"
+                    )
+                except Exception as e:
+                    print(f"[WARN] Failed to log history: {e}", file=sys.stderr)
+
+                try:
                     # Print to console for server-side verification
                     print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")
                     
@@ -373,11 +424,10 @@ def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_
                 except Exception as exc:
                     import traceback
                     traceback.print_exc()
-                    # Do not leak internal error details (e.g. LLM URL, file paths) to the client
                     self.send_response(500)
                     self.send_header('Content-Type', 'text/plain; charset=utf-8')
                     self.end_headers()
-                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
+                    self.wfile.write(b"Error processing suggestion output.")
                     return
 
             self.send_response(404)

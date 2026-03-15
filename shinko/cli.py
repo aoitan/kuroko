@@ -2,6 +2,7 @@ import click
 import json
 from pathlib import Path
 from kuroko_core.config import load_config
+from kuroko_core.history import HistorySummarizer, get_repo_root
 from shinko.llm import LLMClient
 
 @click.command()
@@ -46,7 +47,16 @@ def main(input_file, json_output, config, mode, project):
         )
 
     if project:
-        system_prompt += f" Focus your suggestion on project '{project}'."
+        import re
+        project = re.sub(r'[^a-zA-Z0-9_\-]', '', project)[:64]
+        if project:
+            system_prompt += f" Focus your suggestion on project '{project}'."
+
+    # Secretary Insight (History context)
+    summarizer = HistorySummarizer(cfg.history_path)
+    secretary_insight = summarizer.get_summary(get_repo_root(report_path))
+    if secretary_insight:
+        system_prompt = f"{secretary_insight}\n\n{system_prompt}"
 
     client = LLMClient(cfg.llm)
     messages = [

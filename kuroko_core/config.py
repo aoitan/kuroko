@@ -26,6 +26,7 @@ class KurokoConfig(BaseModel):
     projects: List[ProjectConfig] = []
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    history_path: str = "~/.config/kuroko/history.jsonl"
 
 def find_config() -> Optional[Path]:
     search_paths = [

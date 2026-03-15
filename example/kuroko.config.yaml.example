@@ -30,3 +30,6 @@ llm:
   # api_key: "your-api-key"
   # APIリクエストのタイムアウト秒数 (デフォルト: 30)
   timeout: 30
+
+# 提案アクションの履歴保存先 (デフォルト: ~/.config/kuroko/history.jsonl)
+# history_path: "~/.config/kuroko/history.jsonl"

@@ -91,3 +91,17 @@ def test_invoke_shinko_invalid_json():
         
         with pytest.raises(RuntimeError, match="Failed to parse shinko output as JSON"):
             invoke_shinko("shinko", report_path)
+
+def test_invoke_shinko_custom_timeout():
+    report_path = Path("report.md")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"suggestion": "Delayed success"}),
+            stderr=""
+        )
+        
+        invoke_shinko("shinko", report_path, timeout=300)
+        
+        args, kwargs = mock_run.call_args
+        assert kwargs["timeout"] == 300

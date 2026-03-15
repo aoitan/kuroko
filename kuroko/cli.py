@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 from datetime import datetime
 from kuroko_core.config import load_config
+from kuroko_core.db import init_db
 from kuroko.collector import collect_checkpoints
+from kuroko.memo_collector import collect_memo
 from kuroko.reporter import generate_report
 
 @click.group()
@@ -20,6 +22,29 @@ def main(ctx, config):
     ctx.obj['config'] = cfg
     # Lazy evaluation for other commands to prevent double parsing
     ctx.obj['get_entries'] = lambda: collect_checkpoints(cfg)
+
+@main.group()
+def collect():
+    """Collect data from projects."""
+    pass
+
+@collect.command()
+@click.pass_context
+def memo(ctx):
+    """Collect memo.md files from projects."""
+    cfg = ctx.obj['config']
+    db_conn = init_db(cfg.db_path)
+    
+    total_new = 0
+    total_updated = 0
+    
+    for project in cfg.projects:
+        new_count, updated_count = collect_memo(project, db_conn)
+        total_new += new_count
+        total_updated += updated_count
+        
+    db_conn.close()
+    click.echo(f"Imported {total_new} new memos, Updated {total_updated} existing memos.")
 
 @main.command()
 @click.option('--n', default=10, help='Number of recent entries to show.')

@@ -27,6 +27,7 @@ class KurokoConfig(BaseModel):
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     history_path: str = "~/.config/kuroko/history.jsonl"
+    db_path: str = "~/.config/kuroko/kuroko.db"
 
 def find_config() -> Optional[Path]:
     search_paths = [

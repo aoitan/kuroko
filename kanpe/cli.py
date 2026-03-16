@@ -8,12 +8,15 @@ import sys
 import os
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from datetime import datetime
 
 import click
 import bleach
 from markdown import markdown
+from kuroko_core.config import load_config
 from kuroko_core.history import HistoryLogger, get_repo_root
-
+from kuroko.collector import collect_checkpoints
+from kuroko.reporter import generate_report
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang="ja">
@@ -125,13 +128,10 @@ HTML_TEMPLATE = """<!doctype html>
 </html>
 """
 
-
 class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
-
 def clean_html(html: str) -> str:
-    # Allow safe tags for report visualization.
     allowed_tags = list(bleach.ALLOWED_TAGS) + [
         'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
         'p', 'br', 'hr', 'pre', 'code', 
@@ -143,22 +143,17 @@ def clean_html(html: str) -> str:
     allowed_attrs['th'] = ['style', 'align']
     allowed_attrs['td'] = ['style', 'align']
     
-    # Allow text-align for table cell alignment
     from bleach.css_sanitizer import CSSSanitizer
     css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
     
     return bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
 
-
 def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
-    # md_in_html is required to parse Markdown inside <details> tags
     content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     content = clean_html(content_raw)
     return HTML_TEMPLATE.format(content=content, nonce=nonce)
 
-
-def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False) -> None:
-    # Auto-detect if current report has worklist to maintain state on refresh
+def refresh_report(report_path: Path, kanpe_cmd: str, report_args: str, include_worklist: bool = False) -> None:
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
         try:
@@ -168,7 +163,7 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         except Exception:
             pass
 
-    args = shlex.split(kuroko_cmd, posix=(sys.platform != "win32"))
+    args = shlex.split(kanpe_cmd, posix=(sys.platform != "win32"))
     args.extend(["report", str(report_path)])
     
     if auto_include_worklist:
@@ -182,305 +177,150 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
-
 def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, timeout: int = 60) -> str:
-    """Invokes shinko command and returns the suggestion."""
-    # Resolve shinko command. Default to current python interpreter if it looks like a module path
     if shinko_cmd == "shinko":
-        # Try to use current python if shinko command might not be in PATH
-        # This is safer for development/venv environments
-        cmd = [sys.executable, "-m", "shinko.cli", "--input-file", str(report_path), "--json-output"]
+        cmd = [sys.executable, "-m", "shinko.cli", "insight", "--input-file", str(report_path), "--json-output"]
     else:
         cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
-        cmd.extend(["--input-file", str(report_path), "--json-output"])
+        cmd.extend(["insight", "--input-file", str(report_path), "--json-output"])
 
     if config:
         cmd.extend(["--config", str(config)])
-
     if mode:
         cmd.extend(["--mode", mode])
-    
     if project:
         cmd.extend(["--project", project])
         
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
-        raise RuntimeError(f"shinko command not found: '{cmd[0]}'. Please ensure it is installed.")
+        raise RuntimeError(f"shinko command not found: '{cmd[0]}'.")
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"shinko command timed out after {timeout} seconds.")
+        raise RuntimeError(f"shinko command timed out.")
 
     if result.returncode != 0:
-        stderr_snippet = (result.stderr[:500] + "...") if len(result.stderr) > 500 else result.stderr
-        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr_snippet}")
+        raise RuntimeError(f"shinko command failed (exit {result.returncode})")
         
     try:
         output_data = json.loads(result.stdout)
     except json.JSONDecodeError as e:
-        stdout_snippet = (result.stdout[:500] + "...") if len(result.stdout) > 500 else result.stdout
-        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}\nOutput: {stdout_snippet}")
-
+        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}")
+        
     return output_data.get("suggestion", "")
 
+@click.group()
+@click.option('--config', default=None, help='Path to config file.')
+@click.pass_context
+def main(ctx, config):
+    ctx.ensure_object(dict)
+    ctx.obj['config_path'] = config
 
-@click.command()
+@main.command()
+@click.argument('output_path', type=click.Path(dir_okay=False))
+@click.option('--per-project-files', type=int, default=None, help='Max number of checkpoint files read per project.')
+@click.option('--since', help='Include entries on/after the date (YYYY-MM-DD).')
+@click.option('--until', help='Include entries on/before the date (YYYY-MM-DD).')
+@click.option('--project', multiple=True, help='Filter to one project name.')
+@click.option('--issue', help='Filter to one issue id.')
+@click.option('--include-path', is_flag=True, help='Include file_path.')
+@click.option('--include-evidence/--no-include-evidence', default=True, help='Include evd field.')
+@click.option('--include-worklist', is_flag=True, help='Include open PRs and Issues.')
+@click.option('--collapse-details/--no-collapse-details', default=True, help='Wrap in <details>.')
+@click.option('--title', default='Kuroko Report', help='Title of the report.')
+@click.pass_context
+def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, include_worklist, collapse_details, title):
+    """Generate a human-readable Markdown report."""
+    cfg = load_config(ctx.obj['config_path'])
+
+    def validate_date(date_str, param_name):
+        if not date_str: return None
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            raise click.ClickException(f"Error: Invalid date format for {param_name}.")
+
+    since = validate_date(since, '--since')
+    until = validate_date(until, '--until')
+    clean_issue = issue.replace("ISSUE-", "").replace("#", "") if issue else None
+    projects_list = list(project) if project else None
+    actual_per_project = per_project_files if per_project_files is not None else cfg.defaults.per_project_files
+
+    entries = collect_checkpoints(config=cfg, since=since, until=until, projects=projects_list, issue=clean_issue, per_project_files=actual_per_project)
+
+    worklists = []
+    if include_worklist:
+        from kuroko.worklist import fetch_worklist
+        for p_cfg in cfg.projects:
+            if projects_list and p_cfg.name not in projects_list: continue
+            if p_cfg.repo:
+                try:
+                    data = fetch_worklist(p_cfg.repo, limit=5)
+                    data["project"] = p_cfg.name
+                    worklists.append(data)
+                except Exception as e:
+                    click.echo(f"Warning: {e}", err=True)
+
+    report_content = generate_report(entries=entries, title=title, per_project_files=actual_per_project, filters={}, include_path=include_path, include_evidence=include_evidence, collapse_details=collapse_details, worklists=worklists)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(report_content)
+    click.echo(f"Report successfully generated at {output_path}")
+
+@main.command()
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
-@click.option('--refresh/--no-refresh', default=False, help='Run `kuroko report <input-file>` before rendering.')
-@click.option('--report-args', default='', help='Extra args passed to `kuroko report` when --refresh is enabled.')
-@click.option('--include-worklist', is_flag=True, help='Force include worklist in the generated report on refresh.')
-@click.option('--kuroko-cmd', default='kuroko', help='Command name/path used to execute kuroko.')
-@click.option('--shinko-cmd', default='shinko', help='Command name/path used to execute shinko.')
-@click.option('--host', default='127.0.0.1', help='Host to bind web server.')
-@click.option('--port', default=8765, type=int, help='Port to bind web server.')
+@click.option('--refresh/--no-refresh', default=False, help='Run report before rendering.')
+@click.option('--report-args', default='', help='Extra args passed to report command.')
+@click.option('--include-worklist', is_flag=True, help='Include worklist on refresh.')
+@click.option('--kanpe-cmd', default='kanpe', help='Command to execute kanpe.')
+@click.option('--shinko-cmd', default='shinko', help='Command to execute shinko.')
+@click.option('--host', default='127.0.0.1', help='Host to bind.')
+@click.option('--port', default=8765, type=int, help='Port to bind.')
 @click.option('--open-browser/--no-open-browser', default=True, help='Open browser automatically.')
-@click.option('--config', default=None, help='Path to kuroko.config.yaml')
-@click.option(
-    '--allow-remote',
-    is_flag=True,
-    help='Allow binding to non-localhost interfaces (unsafe; exposes /refresh and /suggest).'
-)
-def main(input_file, refresh, report_args, include_worklist, kuroko_cmd, shinko_cmd, host, port, open_browser, config, allow_remote):
+@click.option('--allow-remote', is_flag=True, help='Allow non-localhost.')
+@click.pass_context
+def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shinko_cmd, host, port, open_browser, allow_remote):
+    """Start Web UI to view report."""
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
-
-    # Prevent accidental exposure on non-localhost interfaces unless explicitly allowed.
-    normalized_host = (host or "").strip().lower()
-    is_localhost = (
-        normalized_host == "localhost"
-        or normalized_host == "::1"
-        or normalized_host.startswith("127.")
-    )
-    if not is_localhost and not allow_remote:
-        raise click.ClickException(
-            "Refusing to bind HTTP server to non-localhost host "
-            f"({host!r}) without --allow-remote.\n"
-            "The kanpe web UI exposes /refresh and /suggest endpoints that are only protected by a "
-            "nonce embedded in the HTML. If you bind to a publicly reachable interface, third parties "
-            "can fetch `/`, obtain the nonce, and replay these actions.\n"
-            "Use --allow-remote only on trusted networks and behind appropriate access controls."
-        )
-    if not is_localhost and allow_remote:
-        click.echo(
-            "WARNING: kanpe HTTP server is bound to a non-localhost interface. "
-            "The /refresh and /suggest endpoints are only protected by a nonce that can be obtained "
-            "from GET `/`. Do NOT expose this to untrusted networks.",
-            err=True,
-        )
+    config_path = ctx.obj['config_path']
 
     if refresh:
-        refresh_report(
-            report_path=report_path,
-            kuroko_cmd=kuroko_cmd,
-            report_args=report_args,
-            include_worklist=include_worklist
-        )
+        refresh_report(report_path=report_path, kanpe_cmd=kanpe_cmd, report_args=report_args, include_worklist=include_worklist)
 
-    # Always check existence even after refresh
     if not report_path.exists():
-        raise click.ClickException(
-            f"report file not found: {report_path} (run `kuroko report {report_path}` first, or use --refresh)"
-        )
+        raise click.ClickException(f"report file not found: {report_path}")
 
     class Handler(BaseHTTPRequestHandler):
-        def _get_post_params(self) -> dict:
-            """Parses the POST body and returns params dict. Caches the result."""
-            if hasattr(self, "_post_params"):
-                return self._post_params
-            
-            try:
-                max_body = 4096
-                content_length = int(self.headers.get('Content-Length', 0))
-                if content_length > max_body:
-                    self._post_params = None
-                    return None
-                
-                post_data = self.rfile.read(content_length).decode('utf-8')
-                from urllib.parse import parse_qs
-                self._post_params = {k: v[0] for k, v in parse_qs(post_data).items()}
-                return self._post_params
-            except Exception:
-                self._post_params = {}
-                return {}
-
-        def _validate_nonce(self) -> bool:
-            """Validates the nonce against current_nonce. Returns True if valid."""
-            params = self._get_post_params()
-            if params is None:
-                self.send_response(413) # Request Entity Too Large
-                self.end_headers()
-                self.wfile.write(b"Request body too large.")
-                return False
-                
-            nonce_in_post = params.get("nonce")
-
-            import hmac
-            if nonce_in_post and hmac.compare_digest(nonce_in_post, current_nonce):
-                return True
-            else:
-                self.send_response(403)
-                self.end_headers()
-                self.wfile.write(b"Forbidden: Invalid nonce.")
-                return False
-
         def do_POST(self):
             if self.path == '/refresh':
-                if not self._validate_nonce():
-                    return
-
-                try:
-                    refresh_report(
-                        report_path=report_path,
-                        kuroko_cmd=kuroko_cmd,
-                        report_args=report_args,
-                        include_worklist=include_worklist
-                    )
-                    self.send_response(303)
-                    self.send_header('Location', '/')
-                    self.end_headers()
-                    return
-                except Exception as exc:
-                    import traceback
-                    traceback.print_exc()
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(b"Failed to refresh report.")
-                    return
-
+                refresh_report(report_path=report_path, kanpe_cmd=kanpe_cmd, report_args=report_args, include_worklist=include_worklist)
+                self.send_response(303); self.send_header('Location', '/'); self.end_headers()
+                return
             if self.path == '/suggest':
-                if not self._validate_nonce():
-                    return
-
-                params = self._get_post_params()
-                if params is None:
-                    return
-
-                mode = params.get("mode")
-                project = params.get("project")
-                
-                # Strict mode validation
-                if mode and mode not in ('normal', 'rescue', 'deep'):
-                    self.send_response(400)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(b"Bad Request: Invalid mode.")
-                    return
-
-                # Strict project sanitization (alphanumeric, dash, underscore only) to prevent stored prompt injection
-                if project:
-                    import re
-                    project = re.sub(r'[^a-zA-Z0-9_\-]', '', project)[:64]
-                    if not project:
-                        project = None
-
-                from kuroko_core.config import load_config
-                cfg = load_config(config)
-
-                try:
-                    shinko_timeout = cfg.llm.timeout + 10
-                    suggestion = invoke_shinko(shinko_cmd, report_path, config, mode=mode, project=project, timeout=shinko_timeout)
-                except Exception as exc:
-                    import traceback
-                    traceback.print_exc()
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(b"Error: Failed to get suggestion. Check server logs for details.")
-                    return
-
-                # Log the event in a separate block so failure doesn't cause a 500 error
-                try:
-                    logger = HistoryLogger(cfg.history_path)
-                    logger.log_event(
-                        repo_root=get_repo_root(report_path),
-                        target_project=project,
-                        mode=mode or "normal",
-                        action="suggest"
-                    )
-                except Exception as e:
-                    print(f"[WARN] Failed to log history: {e}", file=sys.stderr)
-
-                try:
-                    # Print to console for server-side verification
-                    print(f"\n--- Raw LLM Suggestion ---\n{suggestion}\n--------------------------\n")
-                    
-                    suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
-                    
-                    # Append raw text in a details tag for UI verification
-                    import html
-                    raw_escaped = html.escape(suggestion)
-                    suggestion_html += (
-                        f'<hr><details style="margin-top: 1rem; color: #666; font-size: 0.85rem;">'
-                        f'<summary style="cursor: pointer;">生の回答を表示 (Markdown)</summary>'
-                        f'<pre style="white-space: pre-wrap; background: #eee; padding: 0.5rem; margin-top: 0.5rem; border-radius: 4px;">{raw_escaped}</pre>'
-                        f'</details>'
-                    )
-                    
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(suggestion_html.encode('utf-8'))
-                    return
-                except Exception as exc:
-                    import traceback
-                    traceback.print_exc()
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(b"Error processing suggestion output.")
-                    return
-
-            self.send_response(404)
-            self.end_headers()
+                content_length = int(self.headers.get('Content-Length', 0))
+                post_data = self.rfile.read(content_length).decode('utf-8')
+                from urllib.parse import parse_qs
+                params = {k: v[0] for k, v in parse_qs(post_data).items()}
+                mode = params.get("mode"); project = params.get("project")
+                suggestion = invoke_shinko(shinko_cmd, report_path, config_path, mode=mode, project=project)
+                suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
+                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
+                self.wfile.write(suggestion_html.encode('utf-8'))
+                return
 
         def do_GET(self):
             if self.path == '/':
-                try:
-                    with open(report_path, 'r', encoding='utf-8') as f:
-                        markdown_text = f.read()
-                    html = render_markdown_to_html(markdown_text, current_nonce)
-                    self.send_response(200)
-                    self.send_header('Content-Type', 'text/html; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(html.encode('utf-8'))
-                except Exception:
-                    import traceback
-                    traceback.print_exc()
-                    self.send_response(500)
-                    self.send_header('Content-Type', 'text/plain; charset=utf-8')
-                    self.end_headers()
-                    self.wfile.write(b"Error reading or rendering report.")
+                with open(report_path, 'r', encoding='utf-8') as f: markdown_text = f.read()
+                html = render_markdown_to_html(markdown_text, current_nonce)
+                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
+                self.wfile.write(html.encode('utf-8'))
                 return
+        def log_message(self, format, *args): return
 
-            if self.path in ['/refresh', '/suggest']:
-                self.send_response(405)
-                self.end_headers()
-                self.wfile.write(b"Method Not Allowed: Use POST.")
-                return
-
-            self.send_response(404)
-            self.end_headers()
-            self.wfile.write(b"Not Found")
-
-        def log_message(self, format, *args):
-            return
-
-    url = f"http://{host}:{port}"
     with ReusableTCPServer((host, port), Handler) as httpd:
-        click.echo(f"kanpe running at {url}")
-        click.echo("Press Ctrl+C to stop.")
-
-        if open_browser:
-            try:
-                webbrowser.open(url)
-            except Exception:
-                click.echo("Could not open browser automatically.")
-
-        try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            click.echo("\nkanpe stopped.")
-
+        click.echo(f"kanpe running at http://{host}:{port}"); 
+        if open_browser: webbrowser.open(f"http://{host}:{port}")
+        try: httpd.serve_forever()
+        except KeyboardInterrupt: click.echo("\nkanpe stopped.")
 
 if __name__ == '__main__':
     main()

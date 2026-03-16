@@ -35,7 +35,7 @@ def test_fetch_worklist_no_gh_command():
             fetch_worklist("owner/repo")
 
 from click.testing import CliRunner
-from kuroko.cli import main
+from shinko.cli import main
 
 def test_cli_worklist_json(tmp_path):
     config_file = tmp_path / "kuroko.config.yaml"

@@ -48,7 +48,7 @@ def test_fetch_worklist_fallback_on_error():
         assert data["total_pull_requests"] == -1
 
 from click.testing import CliRunner
-from kuroko.cli import main
+from shinko.cli import main
 
 def test_cli_worklist_shows_totals(tmp_path):
     config_file = tmp_path / "kuroko.config.yaml"
@@ -73,7 +73,7 @@ projects:
         runner = CliRunner()
         result = runner.invoke(main, ["--config", str(config_file), "worklist"])
         assert result.exit_code == 0
-        assert "Summary: 10 Open PRs (showing latest 1), 5 Open Issues (showing latest 0)" in result.output
+        assert "Summary: 10 Open PRs, 5 Open Issues" in result.output
 
 def test_cli_worklist_shows_unknown_totals(tmp_path):
     config_file = tmp_path / "kuroko.config.yaml"
@@ -98,4 +98,4 @@ projects:
         runner = CliRunner()
         result = runner.invoke(main, ["--config", str(config_file), "worklist"])
         assert result.exit_code == 0
-        assert "Summary: unknown Open PRs (showing latest 0), unknown Open Issues (showing latest 0)" in result.output
+        assert "Summary: unknown Open PRs, unknown Open Issues" in result.output

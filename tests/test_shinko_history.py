@@ -17,7 +17,7 @@ def test_shinko_with_history_context():
             mock_client.chat_completion.return_value = "Advised"
             mock_summary.return_value = "You worked on kuroko 3 times recently."
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--json-output"])
             assert result.exit_code == 0
             
             messages = mock_client.chat_completion.call_args[0][0]

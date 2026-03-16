@@ -15,7 +15,7 @@ def test_shinko_cli_options():
             mock_client = mock_client_class.return_value
             mock_client.chat_completion.return_value = "Normal suggestion"
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--json-output"])
             assert result.exit_code == 0
             
             messages = mock_client.chat_completion.call_args[0][0]
@@ -27,7 +27,7 @@ def test_shinko_cli_options():
             mock_client = mock_client_class.return_value
             mock_client.chat_completion.return_value = "Rescue suggestion"
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--mode", "rescue", "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--mode", "rescue", "--json-output"])
             # This should fail if --mode is not implemented
             assert result.exit_code == 0
             
@@ -40,7 +40,7 @@ def test_shinko_cli_options():
             mock_client = mock_client_class.return_value
             mock_client.chat_completion.return_value = "Deep suggestion"
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--mode", "deep", "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--mode", "deep", "--json-output"])
             assert result.exit_code == 0
             
             messages = mock_client.chat_completion.call_args[0][0]
@@ -52,7 +52,8 @@ def test_shinko_cli_options():
             mock_client = mock_client_class.return_value
             mock_client.chat_completion.return_value = "Project suggestion"
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--project", "kuroko", "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--project", "kuroko", "--json-output"])
+
             assert result.exit_code == 0
             
             messages = mock_client.chat_completion.call_args[0][0]

@@ -135,3 +135,64 @@ def collect_checkpoints(
     all_entries.sort(key=lambda x: x["project"])
     all_entries.sort(key=lambda x: (x["date"], x["time"]), reverse=True)
     return all_entries
+
+def save_checkpoints_to_db(entries: List[Dict], conn) -> None:
+    """Saves collected checkpoint entries to the database."""
+    import hashlib
+    cursor = conn.cursor()
+    
+    # Track files already saved to avoid redundant processing
+    saved_paths = set()
+    
+    for entry in entries:
+        file_path = entry.get("file_path")
+        if not file_path or file_path in saved_paths:
+            continue
+            
+        # 1. Save or update source_texts
+        # We need the full file content to hash it and save it.
+        # Since entries only contain fragments, we re-read the file.
+        path_obj = Path(file_path)
+        if not path_obj.exists():
+            continue
+            
+        with open(path_obj, "r", encoding="utf-8") as f:
+            raw_text = f.read()
+            
+        file_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+        
+        # INSERT or UPDATE source_texts
+        cursor.execute("""
+            INSERT INTO source_texts (source_type, path, raw_text, file_hash)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(path) DO UPDATE SET
+                raw_text=excluded.raw_text,
+                file_hash=excluded.file_hash,
+                updated_at=CURRENT_TIMESTAMP
+        """, ("checkpoint", str(path_obj), raw_text, file_hash))
+        
+        # Get the ID (lastrowid or re-select if updated)
+        cursor.execute("SELECT id FROM source_texts WHERE path = ?", (str(path_obj),))
+        source_id = cursor.fetchone()[0]
+        
+        # 2. Save chunks
+        # Delete existing chunks for this source to refresh
+        cursor.execute("DELETE FROM chunks WHERE source_id = ?", (source_id,))
+        
+        # Extract and save chunks from all entries related to this file
+        # In this simplistic implementation, we save each timeline entry as a chunk.
+        # We find all entries for the same file in the entries list.
+        file_entries = [e for e in entries if e.get("file_path") == file_path]
+        for idx, e in enumerate(file_entries):
+            # Construct a text representation for the chunk
+            chunk_text = f"[{e['phase']}] {e['act']}\nevd: {e['evd']}\nblock: {e['block']}"
+            chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()
+            
+            cursor.execute("""
+                INSERT INTO chunks (source_id, chunk_index, chunk_text, block_timestamp, chunk_hash)
+                VALUES (?, ?, ?, ?, ?)
+            """, (source_id, idx, chunk_text, e['time'], chunk_hash))
+            
+        saved_paths.add(file_path)
+        
+    conn.commit()

@@ -19,7 +19,7 @@ def test_shinko_project_sanitization():
             # Use a project name with spaces, newlines, and control chars
             malicious_project = "kuroko\n\r;rm -rf /"
             
-            result = runner.invoke(main, ["--input-file", "report.md", "--project", malicious_project, "--json-output"])
+            result = runner.invoke(main, ["insight", "--input-file", "report.md", "--project", malicious_project, "--json-output"])
             assert result.exit_code == 0
             
             messages = mock_client.chat_completion.call_args[0][0]

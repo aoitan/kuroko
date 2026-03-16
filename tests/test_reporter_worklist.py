@@ -40,7 +40,7 @@ def test_generate_report_without_worklist():
     assert "## Worklist" not in report
 
 from click.testing import CliRunner
-from kuroko.cli import main
+from kanpe.cli import main
 from unittest.mock import patch
 
 def test_cli_report_include_worklist(tmp_path):

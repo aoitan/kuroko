@@ -1,53 +1,48 @@
-# Implementation Plan: Phase 1: 最小収集基盤 (`memo.md` 巡回と原文DB保存) (#17)
+# Implementation Plan: Phase 2: 原文の構造化とチャンク化 (#18)
 
 ## 1. 概要とゴール (Summary & Goal)
 - **Must**: 
-  - `kuroko collect memo` サブコマンドを追加する。
-  - `KurokoConfig` の `projects[].root` 配下にある `memo.md` ファイルを再帰的に走査し、SQLite DB に保存する。
-  - 同一ファイル（ハッシュ値が同じ場合）の重複インポートを防ぐ。
+  - インポートされた `memo.md` などの原文テキストを、検索や解釈しやすい単位（チャンク）に分割する。
+  - チャンク化の区切りは「空行」や「見出し」を基準とする。
+  - チャンクデータごとにIDを付与し、元の原文と対応づけて `chunks` テーブルに保存する。
 - **Want**: 
-  - メモ内容のパースや要約などの高度な処理（今回は対象外）。
+  - チャンク化の際に高度な意味解析を行うこと（今回は対象外とし、シンプルなルールベースとする）。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- SQLite DB (`~/.config/kuroko/kuroko.db` 等) の初期化処理の実装。
-- `source_texts` テーブルのスキーマ定義とCRUD処理。
-- `kuroko/cli.py` に `collect` グループおよび `memo` コマンドを追加。
-- `memo.md` を走査して、ハッシュ値ベースで重複チェックを行い、新規/更新分をDBへ保存するコレクターロジック (`kuroko/memo_collector.py` などを新設)。
-- SQLite操作モジュール (`kuroko_core/db.py` などを新設)。
-- 単体テストの追加。
-- `KurokoConfig` へ `db_path` の定義追加。
+- `kuroko_core/db.py` への `chunks` テーブル追加（スキーマ定義）。
+  - カラム: `id`, `source_id`, `chunk_index`, `chunk_text`, `heading`, `block_timestamp`, `chunk_hash`
+- 新規モジュール `kuroko/chunker.py` の作成とチャンク化ロジックの実装。
+  - 空行区切りおよび見出し（`#`）を考慮したテキストブロックの分割。
+  - 分割されたチャンクごとに見出し（直前の見出し）やタイムスタンプ（抽出可能な場合）を保持するロジック。
+- `kuroko/memo_collector.py` へのチャンク化処理の統合。
+  - `collect` 実行時（`source_texts`への新規追加・更新時）に自動でチャンク化を行い、`chunks` テーブルへ保存（更新時は古いチャンクを削除後に再登録）。
+- 関連する単体テストの追加・更新。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
 - **リファクタリング**: 今回の変更に関係のない箇所のコード整理は行わない。
-- **追加機能**: `memo.md` 以外のファイル（例: `README.md`）の収集。収集したメモの要約やAI解析機能。
-- **依存関係**: Python標準の `sqlite3`, `hashlib`, `glob`, `pathlib` などを利用し、SQLAlchemy などの巨大な外部ORMは導入しない。
+- **追加機能**: LLMを用いた高度なチャンク化や、PDF等の他フォーマットのチャンク化対応。
+- **依存関係**: 新しい外部ライブラリ（テキストパース用ライブラリ等）の追加は行わず、標準の文字列処理や正規表現を活用する。
 
 ## 3. 実装ステップ (Implementation Steps)
-1.  [ ] **Step 1**: 設定とデータベース基盤の作成
-    - *Action*: `kuroko_core/config.py` の `KurokoConfig` に `db_path: str = "~/.config/kuroko/kuroko.db"` を追加。
-    - *Action*: `kuroko_core/db.py` を新規作成し、DB初期化 (`init_db`) と `source_texts` テーブルを作成するDDLを実装。
-      - `id`, `source_type`, `path`, `directory_context`, `raw_text`, `file_hash`, `updated_at`, `imported_at`
-    - *Validation*: `tests/test_db.py` を作成し、メモリDB (`:memory:`) または一時ファイルを用いた初期化テストを実装。
-2.  [ ] **Step 2**: コレクターロジックの実装
-    - *Action*: `kuroko/memo_collector.py` を新規作成し、指定プロジェクト配下の `memo.md` を検索する処理を実装。
-    - *Action*: ファイルのハッシュ (SHA-256など) を計算し、DBの `file_hash` と比較して未インポートまたは更新されたファイルのみを `source_texts` に INSERT/UPDATE する処理を実装。
-    - *Validation*: `tests/test_memo_collector.py` を作成。一時ディレクトリにダミーの `memo.md` を配置し、収集と重複防止の挙動をテスト。
-3.  [ ] **Step 3**: CLIコマンドの追加
-    - *Action*: `kuroko/cli.py` に `@click.group() def collect()` を追加し、メインに登録。その下に `@collect.command() def memo()` を定義。
-    - *Action*: `KurokoConfig` を受け取り、DB初期化後に各プロジェクトに対して `memo_collector` を実行するよう連携。
-    - *Validation*: `tests/test_cli_collect.py` を作成し、`CliRunner` を用いてコマンドの呼び出しと出力内容をテスト。
+1.  [ ] **Step 1**: `chunks` テーブルの追加
+    - *Action*: `kuroko_core/db.py` の `init_db` 内に、`chunks` テーブルを作成するDDLを追加。
+    - *Action*: `source_texts` テーブルのIDを参照する `source_id` などを定義し、`chunk_hash` 等のインデックスを作成。
+    - *Validation*: `tests/test_db.py` を修正・追加し、`chunks` テーブルが正しく作成されることを確認する。
+2.  [ ] **Step 2**: チャンク化ロジックの実装
+    - *Action*: `kuroko/chunker.py` を新規作成し、`chunk_text(text: str) -> List[Dict]` 関数を実装する。
+    - *Action*: テキストを空行や見出しで分割し、辞書（`chunk_index`, `chunk_text`, `heading`, `block_timestamp`, `chunk_hash`）のリストを返すようにする。
+    - *Validation*: `tests/test_chunker.py` を作成し、様々なパターンのマークダウンテキストが正しくチャンクに分割・メタデータ抽出されることをテストする。
+3.  [ ] **Step 3**: チャンク化プロセスの統合
+    - *Action*: `kuroko/memo_collector.py` にチャンク化処理を組み込む。
+    - *Action*: 新規テキストの INSERT 時、および更新（UPDATE）時に、該当の `source_id` に紐づく古いチャンクを `DELETE` してから `chunk_text` で生成した新しいチャンクを `INSERT` する。
+    - *Validation*: `tests/test_memo_collector.py` を更新し、1つの `memo.md` から複数チャンクが生成されDBに格納されること、原文との親子関係が保持されていることをテストする。
 
 ## 4. 検証プラン (Verification Plan)
-- `pytest` ですべてのテスト（既存テストおよび新規追加した `test_db.py`, `test_memo_collector.py`, `test_cli_collect.py`）がパスすること。
-- 手動確認:
-  1. `kuroko.config.yaml` が設定された状態で、プロジェクト配下にテスト用の `memo.md` を作成する。
-  2. `kuroko collect memo` を実行し、SQLite DB にレコードが保存されることを確認する。
-  3. 再度 `kuroko collect memo` を実行し、新規インポート件数が0件（スキップ）となることを確認する。
-  4. `memo.md` の内容を変更後、`kuroko collect memo` を実行し、DBが更新されることを確認する。
+- `pytest` ですべてのテスト（既存テストおよび新規追加した `test_chunker.py`, `test_db.py`, `test_memo_collector.py`）がパスすること。
+- テスト内で「1つの `memo.md` から複数チャンクが生成されDBに格納されること」「原文との親子関係が正しく保持されていること」がアサーションされていること。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
 - 既存のロジックを変更する場合は、必ずコメントで理由を残すこと。
-- この計画に含まれないファイルの変更は禁止する。
-- 外部のデータベースライブラリやORMを追加しないこと。標準の `sqlite3` モジュールを利用すること。
 - TDDワークフロー (`doc/development_workflow.md`) に従い、先に失敗するテストを書いてから実装を進めること。
+- チャンク化処理でエラーが発生した場合でも、collector 全体がクラッシュしないよう適切なエラーハンドリングを行うこと。

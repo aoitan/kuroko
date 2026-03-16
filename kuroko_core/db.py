@@ -15,6 +15,8 @@ def init_db(db_path: str):
             db_path_obj.parent.mkdir(parents=True, exist_ok=True)
         
     conn = sqlite3.connect(db_path)
+    # Enable foreign keys
+    conn.execute("PRAGMA foreign_keys = ON;")
     cursor = conn.cursor()
     
     # Create source_texts table
@@ -33,6 +35,24 @@ def init_db(db_path: str):
     
     # Create index on file_hash and path for performance
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_source_texts_hash ON source_texts(file_hash)")
+    
+    # Create chunks table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS chunks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_id INTEGER NOT NULL,
+        chunk_index INTEGER NOT NULL,
+        chunk_text TEXT NOT NULL,
+        heading TEXT,
+        block_timestamp TEXT,
+        chunk_hash TEXT NOT NULL,
+        FOREIGN KEY (source_id) REFERENCES source_texts(id) ON DELETE CASCADE
+    )
+    """)
+    
+    # Create index for chunks
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(chunk_hash)")
     
     conn.commit()
     return conn

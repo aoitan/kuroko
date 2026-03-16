@@ -23,6 +23,25 @@ def test_init_db_creates_table(tmp_path):
         'raw_text', 'file_hash', 'updated_at', 'imported_at'
     }
     assert expected_columns.issubset(columns)
+
+    # Check if chunks table exists
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='chunks';")
+    table = cursor.fetchone()
+    assert table is not None
+    assert table[0] == 'chunks'
+
+    # Check chunks schema
+    cursor.execute("PRAGMA table_info(chunks);")
+    chunk_columns = {col[1] for col in cursor.fetchall()}
+    expected_chunk_columns = {
+        'id', 'source_id', 'chunk_index', 'chunk_text', 
+        'heading', 'block_timestamp', 'chunk_hash'
+    }
+    assert expected_chunk_columns.issubset(chunk_columns)
+
+    # Check if index on chunk_hash exists
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_chunks_hash';")
+    assert cursor.fetchone() is not None
     
     conn.close()
 

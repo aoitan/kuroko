@@ -1,6 +1,9 @@
 import argparse
+import os
 import sqlite3
 import shlex
+import sys
+import warnings
 from pathlib import Path
 from datetime import datetime
 from typing import Iterable, Optional
@@ -46,7 +49,11 @@ def _collect_worklists(cfg: KurokoConfig, projects: Optional[tuple[str, ...]], l
             continue
         if not project.repo:
             continue
-        data = fetch_worklist(project.repo, limit=limit)
+        try:
+            data = fetch_worklist(project.repo, limit=limit)
+        except RuntimeError as exc:
+            warnings.warn(f"Failed to fetch worklist for {project.name}: {exc}", RuntimeWarning)
+            continue
         data["project"] = project.name
         worklists.append(data)
     return worklists
@@ -160,7 +167,9 @@ def parse_report_args(report_args: str) -> dict:
     parser.add_argument("--collapse-details", dest="collapse_details", action="store_true", default=True)
     parser.add_argument("--no-collapse-details", dest="collapse_details", action="store_false")
     parser.add_argument("--title", default="Kuroko Report")
-    parsed = parser.parse_args(shlex.split(report_args) if report_args else [])
+    parsed = parser.parse_args(
+        shlex.split(report_args, posix=(sys.platform != "win32")) if report_args else []
+    )
     result = vars(parsed)
     result["project"] = tuple(result["project"])
     return result
@@ -216,7 +225,7 @@ def _build_db_context(db_path: Path, cfg: KurokoConfig, project: Optional[str] =
     lines = []
     seen_sources = set()
     for path, directory_context, raw_text, chunk_index, chunk_text, heading, block_timestamp in rows:
-        if project_roots and not any(path.startswith(root) for root in project_roots):
+        if project_roots and not any(_is_under_project_root(path, root) for root in project_roots):
             continue
 
         if path not in seen_sources:
@@ -240,3 +249,12 @@ def _truncate_context(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars] + "\n\n(Truncated for LLM context...)"
+
+
+def _is_under_project_root(path: str, root: str) -> bool:
+    resolved_path = os.path.normcase(str(Path(path).expanduser().resolve(strict=False)))
+    resolved_root = os.path.normcase(str(Path(root).expanduser().resolve(strict=False)))
+    try:
+        return os.path.commonpath([resolved_path, resolved_root]) == resolved_root
+    except ValueError:
+        return False

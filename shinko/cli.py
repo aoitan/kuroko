@@ -10,7 +10,6 @@ import click
 
 from kuroko.application import build_shinko_context
 from kuroko.collector import collect_checkpoints
-from kuroko.worklist import fetch_worklist
 from kuroko_core.config import load_config
 from kuroko_core.history import HistorySummarizer, get_repo_root
 from shinko.llm import LLMClient
@@ -85,6 +84,8 @@ def status(ctx, json_output):
 @click.pass_context
 def worklist(ctx, n, json_output):
     """Show open PRs and Issues from GitHub."""
+    from kuroko.worklist import fetch_worklist, format_total_count
+
     cfg = ctx.obj['config']
     results = []
 
@@ -101,8 +102,6 @@ def worklist(ctx, n, json_output):
     if json_output:
         print_json(results)
     else:
-        from kuroko.worklist import format_total_count
-
         if not results:
             click.echo("No worklist items found (ensure 'repo' is set in kuroko.config.yaml).")
             return
@@ -226,6 +225,7 @@ def insight(ctx, input_file, json_output, mode, project, lang):
             worklist_data = "(No worklist info)"
             if proj_cfg.repo:
                 try:
+                    from kuroko.worklist import fetch_worklist
                     worklist = fetch_worklist(proj_cfg.repo, limit=5)
                     pr_list = [f"PR #{pr['id']}: {pr['title']}" for pr in worklist['pull_requests']]
                     issue_list = [f"ISSUE #{issue['id']}: {issue['title']}" for issue in worklist['issues']]

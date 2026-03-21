@@ -192,10 +192,10 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
 
 def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, lang: str = None, timeout: int = 120) -> str:
     if shinko_cmd == "shinko":
-        cmd = [sys.executable, "-m", "shinko.cli", "insight", "--json-output"]
+        cmd = [sys.executable, "-m", "shinko.cli", "insight", "--input-file", str(report_path), "--json-output"]
     else:
         cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
-        cmd.extend(["insight", "--json-output"])
+        cmd.extend(["insight", "--input-file", str(report_path), "--json-output"])
 
     if config:
         cmd.extend(["--config", str(config)])

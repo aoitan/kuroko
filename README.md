@@ -87,6 +87,9 @@ kanpe --input-file report.md --refresh --report-args "--project my-project --sin
 
 # LLM用にJSON形式で出力
 kuroko status --json-output
+
+# 提案生成。設定済み DB に memo/chunk があればそれを優先し、無ければ report.md を使う
+shinko --input-file report.md --json-output
 ```
 
 ## LLMエージェントへの統合（推奨）

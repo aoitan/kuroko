@@ -1,22 +1,23 @@
-import shlex
+import json
+import os
 import secrets
+import shlex
 import socketserver
 import subprocess
-import webbrowser
-import json
 import sys
-import os
+import webbrowser
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from datetime import datetime
 
-import click
 import bleach
+import click
 from markdown import markdown
+
+from kuroko.application import parse_report_args, render_report_to_path
 from kuroko_core.config import load_config
 from kuroko_core.history import HistoryLogger, get_repo_root
-from kuroko.collector import collect_checkpoints
-from kuroko.reporter import generate_report
+
 
 HTML_TEMPLATE = """<!doctype html>
 <html lang="ja">
@@ -67,10 +68,8 @@ HTML_TEMPLATE = """<!doctype html>
       {content}
     </div>
     <script>
-      // Initialize project select from Status table
       (function() {{
         const projects = new Set();
-        // Assume Status table is the first table
         const table = document.querySelector('#report-content table');
         if (table) {{
           const rows = table.querySelectorAll('tbody tr');
@@ -103,15 +102,15 @@ HTML_TEMPLATE = """<!doctype html>
         const content = document.getElementById('suggestion-content');
         const project = document.getElementById('project-select').value;
         const lang = document.getElementById('lang-select').value;
-        
+
         btns.forEach(b => b.classList.add('loading'));
         box.style.display = 'block';
         content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ' / ' + lang + ')';
-        
+
         try {{
           const response = await fetch('/suggest', {{
             method: 'POST',
-            body: new URLSearchParams({{ 
+            body: new URLSearchParams({{
               'nonce': '{nonce}',
               'mode': mode,
               'project': project,
@@ -136,39 +135,43 @@ HTML_TEMPLATE = """<!doctype html>
 </html>
 """
 
+
 class ReusableTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
+
 def clean_html(html: str) -> str:
     allowed_tags = list(bleach.ALLOWED_TAGS) + [
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 
-        'p', 'br', 'hr', 'pre', 'code', 
+        'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+        'p', 'br', 'hr', 'pre', 'code',
         'table', 'thead', 'tbody', 'tr', 'th', 'td',
-        'details', 'summary', 'strong', 'em', 'ul', 'ol', 'li'
+        'details', 'summary', 'strong', 'em', 'ul', 'ol', 'li',
     ]
     allowed_attrs = bleach.ALLOWED_ATTRIBUTES.copy()
     allowed_attrs['a'] = ['href', 'title']
     allowed_attrs['th'] = ['style', 'align']
     allowed_attrs['td'] = ['style', 'align']
-    
+
     from bleach.css_sanitizer import CSSSanitizer
+
     css_sanitizer = CSSSanitizer(allowed_css_properties=['text-align'])
-    
     return bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
+
 
 def render_markdown_to_html(markdown_text: str, nonce: str, default_lang: str = "Japanese") -> str:
     content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     content = clean_html(content_raw)
-    
+
     languages = ["Japanese", "English", "Chinese"]
     lang_options = ""
     for lang in languages:
         selected = 'selected' if lang == default_lang else ''
         lang_options += f'<option value="{lang}" {selected}>{lang}</option>'
-        
+
     return HTML_TEMPLATE.format(content=content, nonce=nonce, lang_options=lang_options)
 
-def refresh_report(report_path: Path, kanpe_cmd: str, report_args: str, include_worklist: bool = False) -> None:
+
+def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False, config: str = None) -> None:
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
         try:
@@ -178,19 +181,14 @@ def refresh_report(report_path: Path, kanpe_cmd: str, report_args: str, include_
         except Exception:
             pass
 
-    args = shlex.split(kanpe_cmd, posix=(sys.platform != "win32"))
-    args.extend(["report", str(report_path)])
-    
-    if auto_include_worklist:
-        args.append("--include-worklist")
-        
-    if report_args:
-        args.extend(shlex.split(report_args, posix=(sys.platform != "win32")))
+    try:
+        parsed_args = parse_report_args(report_args)
+        if auto_include_worklist:
+            parsed_args["include_worklist"] = True
+        render_report_to_path(output_path=report_path, config_path=config, **parsed_args)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    result = subprocess.run(args, capture_output=True, text=True)
-    if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
-        raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
 def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, lang: str = None, timeout: int = 120) -> str:
     if shinko_cmd == "shinko":
@@ -207,32 +205,32 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         cmd.extend(["--project", project])
     if lang:
         cmd.extend(["--lang", lang])
-        
-    print(f"DEBUG: Executing shinko: {' '.join(cmd)}", file=sys.stderr)
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
         raise RuntimeError(f"shinko command not found: '{cmd[0]}'.")
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"shinko command timed out.")
+        raise RuntimeError("shinko command timed out.")
 
     if result.returncode != 0:
         stderr = result.stderr.strip() or "no error output"
         raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr}")
-        
+
     try:
         output_data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Failed to parse shinko output as JSON: {e}")
-        
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Failed to parse shinko output as JSON: {exc}") from exc
+
     if "results" in output_data:
         md_lines = []
-        for r in output_data["results"]:
-            md_lines.append(f"#### {r['project']} (Score: {r.get('score', 0)})")
-            md_lines.append(f"{r.get('suggestion', 'No suggestion')}\n")
+        for item in output_data["results"]:
+            md_lines.append(f"#### {item['project']} (Score: {item.get('score', 0)})")
+            md_lines.append(f"{item.get('suggestion', 'No suggestion')}\n")
         return "\n".join(md_lines)
-        
+
     return output_data.get("suggestion", "")
+
 
 @click.group()
 @click.option('--config', default=None, help='Path to config file.')
@@ -240,6 +238,7 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
 def main(ctx, config):
     ctx.ensure_object(dict)
     ctx.obj['config_path'] = config
+
 
 @main.command()
 @click.argument('output_path', type=click.Path(dir_okay=False))
@@ -256,47 +255,33 @@ def main(ctx, config):
 @click.pass_context
 def report(ctx, output_path, per_project_files, since, until, project, issue, include_path, include_evidence, include_worklist, collapse_details, title):
     """Generate a human-readable Markdown report."""
-    cfg = load_config(ctx.obj['config_path'])
+    try:
+        render_report_to_path(
+            output_path=Path(output_path),
+            config_path=ctx.obj['config_path'],
+            per_project_files=per_project_files,
+            since=since,
+            until=until,
+            project=project,
+            issue=issue,
+            include_path=include_path,
+            include_evidence=include_evidence,
+            include_worklist=include_worklist,
+            collapse_details=collapse_details,
+            title=title,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
 
-    def validate_date(date_str, param_name):
-        if not date_str: return None
-        try:
-            return datetime.strptime(date_str, "%Y-%m-%d").strftime("%Y-%m-%d")
-        except ValueError:
-            raise click.ClickException(f"Error: Invalid date format for {param_name}.")
-
-    since = validate_date(since, '--since')
-    until = validate_date(until, '--until')
-    clean_issue = issue.replace("ISSUE-", "").replace("#", "") if issue else None
-    projects_list = list(project) if project else None
-    actual_per_project = per_project_files if per_project_files is not None else cfg.defaults.per_project_files
-
-    entries = collect_checkpoints(config=cfg, since=since, until=until, projects=projects_list, issue=clean_issue, per_project_files=actual_per_project)
-
-    worklists = []
-    if include_worklist:
-        from kuroko.worklist import fetch_worklist
-        for p_cfg in cfg.projects:
-            if projects_list and p_cfg.name not in projects_list: continue
-            if p_cfg.repo:
-                try:
-                    data = fetch_worklist(p_cfg.repo, limit=5)
-                    data["project"] = p_cfg.name
-                    worklists.append(data)
-                except Exception as e:
-                    click.echo(f"Warning: {e}", err=True)
-
-    report_content = generate_report(entries=entries, title=title, per_project_files=actual_per_project, filters={}, include_path=include_path, include_evidence=include_evidence, collapse_details=collapse_details, worklists=worklists)
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(report_content)
     click.echo(f"Report successfully generated at {output_path}")
+
 
 @main.command()
 @click.option('--input-file', default='report.md', help='Markdown report file to render.')
 @click.option('--refresh/--no-refresh', default=False, help='Run report before rendering.')
 @click.option('--report-args', default='', help='Extra args passed to report command.')
 @click.option('--include-worklist', is_flag=True, help='Include worklist on refresh.')
-@click.option('--kanpe-cmd', default='kanpe', help='Command to execute kanpe.')
+@click.option('--kanpe-cmd', default='kanpe', help='Command kept for compatibility; refresh uses shared layer directly.')
 @click.option('--shinko-cmd', default='shinko', help='Command to execute shinko.')
 @click.option('--host', default='127.0.0.1', help='Host to bind.')
 @click.option('--port', default=8765, type=int, help='Port to bind.')
@@ -311,7 +296,13 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
     cfg = load_config(config_path)
 
     if refresh:
-        refresh_report(report_path=report_path, kanpe_cmd=kanpe_cmd, report_args=report_args, include_worklist=include_worklist)
+        refresh_report(
+            report_path=report_path,
+            kuroko_cmd=kanpe_cmd,
+            report_args=report_args,
+            include_worklist=include_worklist,
+            config=config_path,
+        )
 
     if not report_path.exists():
         raise click.ClickException(f"report file not found: {report_path}")
@@ -319,36 +310,66 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
             if self.path == '/refresh':
-                refresh_report(report_path=report_path, kanpe_cmd=kanpe_cmd, report_args=report_args, include_worklist=include_worklist)
-                self.send_response(303); self.send_header('Location', '/'); self.end_headers()
+                refresh_report(
+                    report_path=report_path,
+                    kuroko_cmd=kanpe_cmd,
+                    report_args=report_args,
+                    include_worklist=include_worklist,
+                    config=config_path,
+                )
+                self.send_response(303)
+                self.send_header('Location', '/')
+                self.end_headers()
                 return
+
             if self.path == '/suggest':
                 content_length = int(self.headers.get('Content-Length', 0))
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 from urllib.parse import parse_qs
+
                 params = {k: v[0] for k, v in parse_qs(post_data).items()}
-                mode = params.get("mode"); project = params.get("project"); lang = params.get("lang")
-                # Add 10s buffer to the shinko process compared to individual LLM requests
-                suggestion = invoke_shinko(shinko_cmd, report_path, config_path, mode=mode, project=project, lang=lang, timeout=cfg.llm.timeout + 10)
+                mode = params.get("mode")
+                project = params.get("project")
+                lang = params.get("lang")
+                suggestion = invoke_shinko(
+                    shinko_cmd,
+                    report_path,
+                    config_path,
+                    mode=mode,
+                    project=project,
+                    lang=lang,
+                    timeout=cfg.llm.timeout + 10,
+                )
                 suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
-                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
                 self.wfile.write(suggestion_html.encode('utf-8'))
                 return
 
         def do_GET(self):
             if self.path == '/':
-                with open(report_path, 'r', encoding='utf-8') as f: markdown_text = f.read()
+                with open(report_path, 'r', encoding='utf-8') as f:
+                    markdown_text = f.read()
                 html = render_markdown_to_html(markdown_text, current_nonce, default_lang=cfg.llm.language)
-                self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
                 self.wfile.write(html.encode('utf-8'))
                 return
-        def log_message(self, format, *args): return
+
+        def log_message(self, format, *args):
+            return
 
     with ReusableTCPServer((host, port), Handler) as httpd:
-        click.echo(f"kanpe running at http://{host}:{port}"); 
-        if open_browser: webbrowser.open(f"http://{host}:{port}")
-        try: httpd.serve_forever()
-        except KeyboardInterrupt: click.echo("\nkanpe stopped.")
+        click.echo(f"kanpe running at http://{host}:{port}")
+        if open_browser:
+            webbrowser.open(f"http://{host}:{port}")
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            click.echo("\nkanpe stopped.")
+
 
 if __name__ == '__main__':
     main()

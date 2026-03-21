@@ -19,7 +19,8 @@ class LLMConfig(BaseModel):
     url: str = "http://localhost:11434/v1"
     model: str = "llama3"
     api_key: Optional[str] = None
-    timeout: int = 30
+    timeout: int = 60
+    language: str = "Japanese"
 
 class KurokoConfig(BaseModel):
     version: int = 1

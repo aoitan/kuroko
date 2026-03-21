@@ -56,6 +56,29 @@ def test_invoke_shinko_with_mode_and_project():
         assert "--project" in args[0]
         assert "kuroko" in args[0]
 
+def test_invoke_shinko_with_lang():
+    report_path = Path("report.md")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({"suggestion": "Localized suggestion"}),
+            stderr=""
+        )
+        
+        # Test Chinese
+        suggestion = invoke_shinko("shinko", report_path, lang="Chinese")
+        assert suggestion == "Localized suggestion"
+        
+        args, kwargs = mock_run.call_args
+        assert "--lang" in args[0]
+        assert "Chinese" in args[0]
+        
+        # Test Japanese
+        invoke_shinko("shinko", report_path, lang="Japanese")
+        args, kwargs = mock_run.call_args
+        assert "--lang" in args[0]
+        assert "Japanese" in args[0]
+
 def test_invoke_shinko_file_not_found():
     report_path = Path("report.md")
     with patch("subprocess.run", side_effect=FileNotFoundError):

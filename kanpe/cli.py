@@ -45,6 +45,12 @@ HTML_TEMPLATE = """<!doctype html>
           <option value="">(全体)</option>
         </select>
       </div>
+      <div style="margin-right: 1rem; display: flex; align-items: center;">
+        <label for="lang-select" style="font-size: 0.85rem; margin-right: 0.5rem; color: #666;">言語:</label>
+        <select id="lang-select" style="padding: 0.4rem; border-radius: 4px; border: 1px solid #ccc; font-size: 0.9rem;">
+          {lang_options}
+        </select>
+      </div>
       <button id="suggest-btn-normal" class="btn" style="background: #28a745; border-color: #28a745; margin-right: 0.5rem;" onclick="getSuggestion('normal')">🚀 通常</button>
       <button id="suggest-btn-rescue" class="btn" style="background: #ffc107; border-color: #ffc107; color: #000; margin-right: 0.5rem;" onclick="getSuggestion('rescue')">🧹 保守救済</button>
       <button id="suggest-btn-deep" class="btn" style="background: #007bff; border-color: #007bff; margin-right: 0.5rem;" onclick="getSuggestion('deep')">🔍 深掘り</button>
@@ -96,10 +102,11 @@ HTML_TEMPLATE = """<!doctype html>
         const box = document.getElementById('suggestion-box');
         const content = document.getElementById('suggestion-content');
         const project = document.getElementById('project-select').value;
+        const lang = document.getElementById('lang-select').value;
         
         btns.forEach(b => b.classList.add('loading'));
         box.style.display = 'block';
-        content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ')';
+        content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ' / ' + lang + ')';
         
         try {{
           const response = await fetch('/suggest', {{
@@ -107,7 +114,8 @@ HTML_TEMPLATE = """<!doctype html>
             body: new URLSearchParams({{ 
               'nonce': '{nonce}',
               'mode': mode,
-              'project': project
+              'project': project,
+              'lang': lang
             }})
           }});
           if (response.ok) {{
@@ -148,10 +156,17 @@ def clean_html(html: str) -> str:
     
     return bleach.clean(html, tags=allowed_tags, attributes=allowed_attrs, css_sanitizer=css_sanitizer)
 
-def render_markdown_to_html(markdown_text: str, nonce: str) -> str:
+def render_markdown_to_html(markdown_text: str, nonce: str, default_lang: str = "Japanese") -> str:
     content_raw = markdown(markdown_text, extensions=["extra", "md_in_html"])
     content = clean_html(content_raw)
-    return HTML_TEMPLATE.format(content=content, nonce=nonce)
+    
+    languages = ["Japanese", "English", "Chinese"]
+    lang_options = ""
+    for lang in languages:
+        selected = 'selected' if lang == default_lang else ''
+        lang_options += f'<option value="{lang}" {selected}>{lang}</option>'
+        
+    return HTML_TEMPLATE.format(content=content, nonce=nonce, lang_options=lang_options)
 
 def refresh_report(report_path: Path, kanpe_cmd: str, report_args: str, include_worklist: bool = False) -> None:
     auto_include_worklist = include_worklist
@@ -177,12 +192,12 @@ def refresh_report(report_path: Path, kanpe_cmd: str, report_args: str, include_
         stderr = result.stderr.strip() or result.stdout.strip() or "unknown error"
         raise click.ClickException(f"failed to run {' '.join(args)}: {stderr}")
 
-def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, timeout: int = 60) -> str:
+def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, lang: str = None, timeout: int = 120) -> str:
     if shinko_cmd == "shinko":
-        cmd = [sys.executable, "-m", "shinko.cli", "insight", "--input-file", str(report_path), "--json-output"]
+        cmd = [sys.executable, "-m", "shinko.cli", "insight", "--json-output"]
     else:
         cmd = shlex.split(shinko_cmd, posix=(sys.platform != "win32"))
-        cmd.extend(["insight", "--input-file", str(report_path), "--json-output"])
+        cmd.extend(["insight", "--json-output"])
 
     if config:
         cmd.extend(["--config", str(config)])
@@ -190,7 +205,10 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         cmd.extend(["--mode", mode])
     if project:
         cmd.extend(["--project", project])
+    if lang:
+        cmd.extend(["--lang", lang])
         
+    print(f"DEBUG: Executing shinko: {' '.join(cmd)}", file=sys.stderr)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -199,12 +217,20 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         raise RuntimeError(f"shinko command timed out.")
 
     if result.returncode != 0:
-        raise RuntimeError(f"shinko command failed (exit {result.returncode})")
+        stderr = result.stderr.strip() or "no error output"
+        raise RuntimeError(f"shinko command failed (exit {result.returncode}): {stderr}")
         
     try:
         output_data = json.loads(result.stdout)
     except json.JSONDecodeError as e:
         raise RuntimeError(f"Failed to parse shinko output as JSON: {e}")
+        
+    if "results" in output_data:
+        md_lines = []
+        for r in output_data["results"]:
+            md_lines.append(f"#### {r['project']} (Score: {r.get('score', 0)})")
+            md_lines.append(f"{r.get('suggestion', 'No suggestion')}\n")
+        return "\n".join(md_lines)
         
     return output_data.get("suggestion", "")
 
@@ -282,6 +308,7 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
     report_path = Path(input_file)
     current_nonce = secrets.token_hex(16)
     config_path = ctx.obj['config_path']
+    cfg = load_config(config_path)
 
     if refresh:
         refresh_report(report_path=report_path, kanpe_cmd=kanpe_cmd, report_args=report_args, include_worklist=include_worklist)
@@ -300,8 +327,9 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
                 post_data = self.rfile.read(content_length).decode('utf-8')
                 from urllib.parse import parse_qs
                 params = {k: v[0] for k, v in parse_qs(post_data).items()}
-                mode = params.get("mode"); project = params.get("project")
-                suggestion = invoke_shinko(shinko_cmd, report_path, config_path, mode=mode, project=project)
+                mode = params.get("mode"); project = params.get("project"); lang = params.get("lang")
+                # Add 10s buffer to the shinko process compared to individual LLM requests
+                suggestion = invoke_shinko(shinko_cmd, report_path, config_path, mode=mode, project=project, lang=lang, timeout=cfg.llm.timeout + 10)
                 suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
                 self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
                 self.wfile.write(suggestion_html.encode('utf-8'))
@@ -310,7 +338,7 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
         def do_GET(self):
             if self.path == '/':
                 with open(report_path, 'r', encoding='utf-8') as f: markdown_text = f.read()
-                html = render_markdown_to_html(markdown_text, current_nonce)
+                html = render_markdown_to_html(markdown_text, current_nonce, default_lang=cfg.llm.language)
                 self.send_response(200); self.send_header('Content-Type', 'text/html; charset=utf-8'); self.end_headers()
                 self.wfile.write(html.encode('utf-8'))
                 return

@@ -10,6 +10,8 @@ class HashEmbeddingClient:
     """Deterministic local embedder for tests and offline operation."""
 
     def __init__(self, model: str = "hash-v1", dimensions: int = 8):
+        if dimensions < 1 or dimensions > 16:
+            raise ValueError("dimensions must be between 1 and 16")
         self.model = model
         self.dimensions = dimensions
 
@@ -34,6 +36,8 @@ def create_embedding_client(config: Optional[EmbeddingConfig] = None) -> HashEmb
 
 
 def cosine_similarity(left: List[float], right: List[float]) -> float:
+    if len(left) != len(right):
+        raise ValueError("embedding dimensions must match")
     left_norm = math.sqrt(sum(value * value for value in left))
     right_norm = math.sqrt(sum(value * value for value in right))
     if left_norm == 0 or right_norm == 0:
@@ -48,30 +52,43 @@ def find_similar_chunks(
     limit: int = 5,
     query_text: Optional[str] = None,
     query_chunk_id: Optional[int] = None,
+    chunking_version: Optional[str] = None,
     exclude_self: bool = True,
 ):
     if query_text is None and query_chunk_id is None:
         raise ValueError("query_text or query_chunk_id is required")
 
     cursor = conn.cursor()
+    effective_chunking_version = chunking_version
     if query_chunk_id is not None:
+        params = [query_chunk_id, model]
+        version_clause = ""
+        if chunking_version is not None:
+            version_clause = " AND chunking_version = ?"
+            params.append(chunking_version)
         cursor.execute(
-            """
-            SELECT embedding
+            f"""
+            SELECT embedding, chunking_version
             FROM chunk_embeddings
-            WHERE chunk_id = ? AND embedding_model = ?
+            WHERE chunk_id = ? AND embedding_model = ?{version_clause}
             """,
-            (query_chunk_id, model),
+            tuple(params),
         )
         row = cursor.fetchone()
         if row is None:
             return []
         query_embedding = json.loads(row[0])
+        effective_chunking_version = row[1]
     else:
         query_embedding = create_embedding_client(EmbeddingConfig(model=model)).embed_texts([query_text])[0]
 
+    params = [model]
+    version_clause = ""
+    if effective_chunking_version is not None:
+        version_clause = " AND ce.chunking_version = ?"
+        params.append(effective_chunking_version)
     cursor.execute(
-        """
+        f"""
         SELECT
             c.id,
             c.chunk_text,
@@ -80,9 +97,9 @@ def find_similar_chunks(
             ce.embedding
         FROM chunks c
         JOIN chunk_embeddings ce ON ce.chunk_id = c.id
-        WHERE ce.embedding_model = ?
+        WHERE ce.embedding_model = ?{version_clause}
         """,
-        (model,),
+        tuple(params),
     )
     rows = cursor.fetchall()
 

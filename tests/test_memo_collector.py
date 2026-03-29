@@ -114,7 +114,6 @@ def test_collect_memo_updates_changed_file(tmp_path):
     cursor.execute("SELECT imported_at FROM source_texts")
     imported_at_first = cursor.fetchone()[0]
     
-    import time
     time.sleep(1.1)  # Ensure timestamp can change
     
     # Update content

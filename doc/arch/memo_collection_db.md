@@ -41,10 +41,22 @@
 | `block_timestamp`| TEXT | - | テキスト内から抽出された日時（YYYY-MM-DDなど） |
 | `chunk_hash` | TEXT | NOT NULL | チャンク内容のハッシュ値 |
 
+### テーブル: `chunk_embeddings`
+`chunks` から再生成可能な派生データとして、埋め込みベクトルを格納します。
+
+| カラム名 | 型 | 制約 | 説明 |
+| :--- | :--- | :--- | :--- |
+| `chunk_id` | INTEGER | PRIMARY KEY | `chunks(id)` を参照する対象 chunk |
+| `embedding` | TEXT | NOT NULL | JSON 文字列化した埋め込みベクトル |
+| `embedding_model` | TEXT | NOT NULL | 埋め込み生成に使用したモデル名 |
+| `embedded_at` | DATETIME | DEFAULT CURRENT_TIMESTAMP | 埋め込みを最後に生成した時刻 |
+| `chunking_version` | TEXT | NOT NULL | chunk 分割ルールのバージョン |
+
 ### インデックス
 - `idx_source_texts_hash`: `source_texts(file_hash)` による高速な重複チェック用。
 - `idx_chunks_source`: `chunks(source_id)` による特定ソースに紐づくチャンクの高速取得用。
 - `idx_chunks_hash`: `chunks(chunk_hash)` によるチャンク単位の重複・変更検知用。
+- `idx_chunk_embeddings_model`: `chunk_embeddings(embedding_model)` によるモデル単位の検索・再生成対象絞り込み用。
 
 ## 4. 設計判断 (Design Decisions)
 
@@ -70,6 +82,16 @@ Phase 2 では、以下の優先順位で処理を行います。
     - パスが新規の場合のみ、内容（ハッシュ）が他プロジェクトを含め既に存在するか確認し、存在すればインポートをスキップする。
     - **判断理由**: 同一内容のメモが複数箇所にある場合の冗長性を排除しつつ、既存ファイルの「内容変更」を確実に追跡するため。
 
+### 4.4. 埋め込みの差分更新
+- 埋め込みは `chunks` とは別テーブルで持ち、原文 DB の正本性を壊さない。
+- `memo.md` 再収集時は chunk 同期を行い、**内容が変わっていない chunk は ID を維持**する。
+- 埋め込み再生成の条件は以下とする。
+  - 新規 chunk が追加された
+  - 既存 chunk の内容が変わった
+  - `embedding_model` が変わった
+  - `chunking_version` が変わった
+- 削除された chunk の埋め込みは、外部キーの `ON DELETE CASCADE` で自動的に除去する。
+
 ## 5. 将来の拡張性への考慮
-- **ベクトル検索 (RAG)**: `chunks` テーブルに `embedding` カラム（ベクトルデータ）を追加することで、そのままRAG（検索補完生成）の基盤として利用可能。
+- **ベクトル検索 (RAG)**: `chunk_embeddings` を使うことで、そのままRAG（検索補完生成）の基盤として利用可能。
 - **メタデータの充実**: チャンクごとにLLMで生成した「要約」や「キーワード」を保存するカラムを追加することで、検索精度をさらに向上させることが可能。

@@ -37,6 +37,9 @@ projects:
   - name: kuroko
     root: /workspace
 db_path: /workspace/.data/kuroko.db
+embedding:
+  model: hash-v1
+  chunking_version: "1"
 defaults:
   max_depth: 2
 ```
@@ -59,6 +62,9 @@ docker compose run --rm app shinko --config /workspace/.data/config.yaml insight
 # Web UI
 docker compose up kanpe
 ```
+
+`collect memo` は `source_texts` / `chunks` に加えて `chunk_embeddings` も更新します。
+同一内容での再実行時は既存埋め込みを再利用し、chunk 内容または embedding 設定が変わった場合だけ再生成します。
 
 ### 壊れたときのやり直し
 
@@ -104,6 +110,9 @@ version: 1
 projects:
   - name: my-project
     root: /path/to/my-project
+embedding:
+  model: hash-v1
+  chunking_version: "1"
 defaults:
   max_depth: 2  # 探索する深さ（デフォルトは無制限）
 ```

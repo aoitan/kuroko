@@ -22,11 +22,18 @@ class LLMConfig(BaseModel):
     timeout: int = 60
     language: str = "Japanese"
 
+
+class EmbeddingConfig(BaseModel):
+    model: str = "hash-v1"
+    chunking_version: str = "1"
+
+
 class KurokoConfig(BaseModel):
     version: int = 1
     projects: List[ProjectConfig] = []
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
     history_path: str = "~/.config/kuroko/history.jsonl"
     db_path: str = "~/.config/kuroko/kuroko.db"
 

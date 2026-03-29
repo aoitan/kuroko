@@ -20,3 +20,20 @@ projects:
     from kuroko_core.config import load_config
     cfg = load_config(str(config_file))
     assert cfg.projects[0].repo == "aoitan/kuroko"
+
+
+def test_load_config_with_embedding(tmp_path):
+    config_file = tmp_path / "kuroko.config.yaml"
+    config_file.write_text("""
+version: 1
+embedding:
+  model: test-embedding-v2
+  chunking_version: phase3
+""")
+
+    from kuroko_core.config import load_config
+
+    cfg = load_config(str(config_file))
+
+    assert cfg.embedding.model == "test-embedding-v2"
+    assert cfg.embedding.chunking_version == "phase3"

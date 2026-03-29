@@ -1,6 +1,6 @@
 import sqlite3
-import os
 from pathlib import Path
+
 
 def init_db(db_path: str):
     """Initializes the SQLite database and creates the source_texts table."""
@@ -53,6 +53,21 @@ def init_db(db_path: str):
     # Create index for chunks
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_source ON chunks(source_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_chunks_hash ON chunks(chunk_hash)")
+
+    # Create derived embedding store for chunk similarity lookup
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS chunk_embeddings (
+        chunk_id INTEGER PRIMARY KEY,
+        embedding TEXT NOT NULL,
+        embedding_model TEXT NOT NULL,
+        embedded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        chunking_version TEXT NOT NULL,
+        FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(embedding_model)"
+    )
     
     conn.commit()
     return conn

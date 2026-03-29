@@ -6,6 +6,7 @@ services:
     working_dir: /workspace
     user: "${UID:-1000}:${GID:-1000}"
     environment:
+      HOME: /home/dev
       UV_CACHE_DIR: /var/cache/uv
       UV_LINK_MODE: copy
       UV_PROJECT_ENVIRONMENT: /var/cache/uv/project-env
@@ -14,7 +15,9 @@ services:
     volumes:
       - .:/workspace
       - ./.data:/workspace/.data
+      - dev-home:/home/dev
       - uv-cache:/var/cache/uv
+    entrypoint: ["/usr/local/bin/dev-entrypoint.sh"]
     command: ["sh"]
 
   app:
@@ -67,4 +70,5 @@ services:
       - "127.0.0.1:8765:8765"
 
 volumes:
+  dev-home:
   uv-cache:

@@ -1,0 +1,15 @@
+.git
+.gitignore
+.pytest_cache
+.ruff_cache
+.venv
+.serena
+.data
+__pycache__
+*.py[cod]
+build
+dist
+*.egg-info
+checkpoint/*.md
+test_report.md
+memo.md

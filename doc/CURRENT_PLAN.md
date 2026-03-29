@@ -1,69 +1,67 @@
-# Implementation Plan: Phase 4: サブコマンドの責務分離 (collect/shinko/kanpe) (#19)
+# Implementation Plan: 開発環境と実行環境のコンテナ化 (#29)
 
 ## 1. 概要とゴール (Summary & Goal)
-- **Must**:
-  - `collect` を収集・保存責務に寄せ、`kanpe` を人間向け表示、`shinko` を分析責務として整理する。
-  - `kanpe` と `shinko` が `kuroko report` のような表示用 CLI に依存せず、共有ロジック経由で必要なデータを取得できる状態にする。
-  - 既存利用者への破壊を最小化しつつ、今後の Phase 5-7 に進めるための依存方向を明確にする。
-- **Want**:
-  - `kuroko recent/blockers/status/worklist` まで完全に再編すること。
-  - `shinko` の推論結果保存や `kanpe daily/weekly/project` などの新ビュー実装。
+- **Must**: `kuroko` / `kanpe` / `shinko` を、issue ごとの `git worktree` を `/workspace` に bind mount したコンテナで実行できるようにする。
+- **Must**: 開発環境を壊しても、コンテナを破棄して再作成すればやり直せる構成にする。
+- **Must**: 永続化すべき状態を worktree と `./.data` に分離し、コンテナ内部の壊れた状態を持ち越さないようにする。
+- **Must**: 開発環境コンテナと実行環境コンテナを分け、`docker compose` で統一操作できるようにする。
+- **Want**: Dev Container 対応、cron 実行の足場、キャッシュ最適化。
 
 ## 2. スコープ定義 (Scope Definition)
 ### ✅ In-Scope (やること)
-- `kuroko/cli.py` の責務を見直し、少なくとも「表示生成ロジック」を CLI 本体から分離する。
-- 共有データ取得・共有レポート生成のためのアプリケーション層を追加または既存モジュールへ抽出する。
-  - 候補: `kuroko/reporter.py` の整理、または新規の薄いサービスモジュール追加。
-- `kanpe/cli.py` の `--refresh` を `kuroko report` の subprocess 依存から外し、共有ロジック呼び出しへ置き換える。
-- `shinko/cli.py` が表示済み Markdown だけに縛られないよう、少なくとも共有データ取得層を経由できる形へ変更する。
-  - 最小実装は「DB/raw/chunk を読むための入口を shared layer に用意し、`shinko` から利用可能にする」まで。
-- 既存コマンド互換性の扱いを明確にする。
-  - `kuroko report` は削除せず、必要なら shared layer を呼ぶ薄い互換ラッパに留める。
-- 関連テストと README のコマンド説明を更新する。
+- `Dockerfile.dev` を追加し、開発用の Python/uv/pytest 実行環境を定義する。
+- `Dockerfile` を追加し、`kuroko` / `kanpe` / `shinko` の実行向けランタイムを定義する。
+- `compose.yaml` を追加し、dev/app/kanpe の実行モードを整理する。
+- `.dockerignore` を追加し、不要ファイルを build context から除外する。
+- worktree bind mount と `./.data` 永続化ディレクトリの運用を compose に反映する。
+- `README.md` または `doc/` に、起動方法と「壊れたら捨ててやり直す」手順を追記する。
 
 ### ⛔ Non-Goals (やらないこと/スコープ外)
-- **新機能追加**: Phase 5 以降の TODO 抽出、推論保存、埋め込み更新、`kanpe daily/weekly/project` の新規ビュー実装。
-- **全面リネーム**: 既存 CLI の全サブコマンドを一気に廃止・改名する作業。
-- **大規模リファクタリング**: Issue 19 に直接関係しない parser / collector / DB の整理。
-- **永続化設計拡張**: `shinko` の出力保存用テーブル追加や複雑なスキーマ変更。
+- **アプリ本体の機能追加**: `kuroko` / `kanpe` / `shinko` の機能拡張は行わない。
+- **広いリファクタリング**: コンテナ化に直接必要ない CLI 再設計や DB スキーマ変更は行わない。
+- **本番基盤**: Kubernetes、secrets 配布、監視、CI/CD 基盤の整備は行わない。
+- **外部DB化**: SQLite 以外への移行は行わない。
 
 ## 3. 実装ステップ (Implementation Steps)
-1. [ ] **Step 1**: 依存関係の切り出し
-   - *Action*: `kuroko/cli.py` に埋まっている `report` 向けの入力収集・filter 正規化・worklist 取得処理を、CLI 非依存の共有関数へ抽出する。
-   - *Action*: `kuroko/reporter.py` は Markdown を組み立てる純粋関数として維持し、CLI 固有処理を持たせない。
-   - *Validation*: 共有関数単位のテスト、または既存 `tests/test_reporter.py` と新規 CLI テストで挙動が変わらないことを確認する。
+1. [ ] **Step 1**: 開発・実行コンテナの責務を固定する
+   - *Action*: 既存の `README.md` と `pyproject.toml` を前提に、開発用と実行用に必要な依存・エントリポイント・作業ディレクトリを整理する。
+   - *Validation*: どのコマンドを `Dockerfile.dev` と `Dockerfile` のどちらで受けるかが明確になること。
 
-2. [ ] **Step 2**: `kanpe` の refresh 経路を再配線
-   - *Action*: `kanpe/cli.py` の `refresh_report()` から `kuroko report` subprocess 依存を外し、Step 1 の shared layer を直接呼ぶ。
-   - *Action*: レポート再生成に必要な `--project`, `--issue`, `--since`, `--until`, `--include-worklist` などの引数受け渡し方針を整理する。
-   - *Validation*: `tests/test_kanpe_refresh.py` と関連テストを更新し、`kanpe --refresh` が subprocess なしでも同じ成果物を生成できることを確認する。
+2. [ ] **Step 2**: 開発環境コンテナを設計・実装する
+   - *Action*: `Dockerfile.dev` を追加し、`uv run pytest` と各 CLI の `uv run ...` が動く構成を作る。
+   - *Action*: non-root 実行、`/workspace` 固定マウント、キャッシュ保存先を定義する。
+   - *Validation*: `docker compose run --rm dev uv run pytest` が通ること。
 
-3. [ ] **Step 3**: `shinko` の入力境界を整理
-   - *Action*: `shinko/cli.py` の「`report.md` を丸ごと LLM に渡す」構造を見直し、shared layer から raw/chunk 系データを取得できる入口を追加する。
-   - *Action*: 互換性のため、既存 `--input-file` を残す場合でも、内部では「表示データ」と「分析用データ」を切り分ける。
-   - *Validation*: `tests/test_shinko_cli.py`, `tests/test_shinko_history.py`, `tests/test_shinko_sanitization.py` を更新し、モード指定・project 絞り込み・履歴付与が維持されることを確認する。
+3. [ ] **Step 3**: 実行環境コンテナを設計・実装する
+   - *Action*: `Dockerfile` を追加し、最小ランタイムで `kuroko` / `kanpe` / `shinko` を個別 command として動かせるようにする。
+   - *Action*: `kanpe` のポート公開前提を組み込む。
+   - *Validation*: `docker compose run --rm app kuroko --help`、`docker compose run --rm app shinko --help`、`docker compose up kanpe` が成立すること。
 
-4. [ ] **Step 4**: `kuroko` 側の責務を収集寄りに寄せる
-   - *Action*: `kuroko/cli.py` では `collect` を主責務として明確化し、`report` は互換ラッパまたは deprecation コメント付きの薄い導線に留める。
-   - *Action*: `recent/blockers/status/worklist` を今回残すなら、その理由を README と計画上で明示し、「完全再編は別 Issue」に切り分ける。
-   - *Validation*: `tests/test_cli_collect.py` と必要な CLI テストで既存コマンドが壊れていないことを確認する。
+4. [ ] **Step 4**: 永続化と再作成性を compose に落とす
+   - *Action*: `compose.yaml` で worktree bind mount、`./.data` 永続化、必要な named volume を定義する。
+   - *Action*: 設定、DB、レポート、checkpoint の mount ポリシーを明示する。
+   - *Validation*: コンテナを削除して再作成しても `./.data` の内容が残り、再実行できること。
 
-5. [ ] **Step 5**: ドキュメントと回帰確認
-   - *Action*: `README.md` のコマンド説明を責務分離後の実態に合わせて更新する。
-   - *Action*: 必要なら `doc/ROADMAP.md` と齟齬が出ないよう最小限の追記を行う。
-   - *Validation*: `uv run pytest` を実行し、CLI・report・kanpe・shinko 系テストがすべて通ることを完了条件とする。
+5. [ ] **Step 5**: build context と運用ドキュメントを整える
+   - *Action*: `.dockerignore` を追加し、`.venv`、`__pycache__`、テスト生成物などを除外する。
+   - *Action*: `README.md` または `doc/` に、基本操作、復旧手順、注意点を記載する。
+   - *Validation*: 新規参加者が README だけで build、test、run、recreate の流れを追えること。
 
 ## 4. 検証プラン (Verification Plan)
-- `uv run pytest tests/test_cli_collect.py tests/test_reporter.py tests/test_kanpe_refresh.py tests/test_kanpe_shinko_invocation.py tests/test_kanpe_suggest.py tests/test_shinko_cli.py tests/test_shinko_history.py tests/test_shinko_sanitization.py`
-- 可能なら最終確認として `uv run pytest` 全体を実行する。
-- 手動確認:
-  - `kuroko collect memo` が従来どおり動くこと。
-  - `kanpe --refresh --input-file report.md` でレポート再生成と表示ができること。
-  - `shinko` が shared layer 経由の分析入力を使ってもモード別応答を返せること。
+- `docker compose build` が通ること。
+- `docker compose run --rm dev uv run pytest` が通ること。
+- `docker compose run --rm app kuroko collect memo --config /workspace/.data/config.yaml` が通ること。
+- `docker compose run --rm app shinko insight --config /workspace/.data/config.yaml --input-file /workspace/.data/report.md` が通ること。
+- `docker compose up kanpe` で `kanpe` UI を開けること。
+- 開発コンテナ内の一時状態を壊した後でも、再作成で復旧できること。
 
 ## 5. ガードレール (Guardrails for Coding Agent)
-- 互換性を壊す CLI 削除は行わない。廃止したい場合はまず薄いラッパを残す。
-- subprocess 呼び出しを減らす目的で、shared layer に寄せる。ただしロジック重複のまま別 CLI へコピーしない。
-- `shinko` は Roadmap の通り「生寄り入力」に近づけるが、Issue 19 の範囲では推論保存や抽出器追加まで広げない。
-- `kanpe` は表示責務に留め、分析ロジックや収集ロジックを抱え込まない。
-- テストは CLI 文字列の表層だけでなく、依存方向が改善したことを確認できるように更新する。
+- ホスト絶対パスを前提にした設定例を標準化しないこと。
+- `projects[].root` はコンテナ内パスで扱う前提を崩さないこと。
+- 生成物を worktree 直下へ散らばせず、`./.data` へ寄せること。
+- Docker 実装のために既存 CLI の意味を変えないこと。
+- この計画に含まれないアプリ本体の大きなリファクタリングは行わないこと。
+
+## 6. 関連ドキュメント (Related Docs)
+- 要件定義: [doc/plans/containerization-requirements.md](/Users/aoitan/workspace/kuroko/issue-19/doc/plans/containerization-requirements.md)
+- Issue: #29 `開発環境と実行環境のコンテナ化`

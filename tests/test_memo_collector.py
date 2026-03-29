@@ -1,7 +1,6 @@
 import os
 import sqlite3
 import hashlib
-import time
 from pathlib import Path
 from kuroko_core.db import init_db
 from kuroko.memo_collector import collect_memo
@@ -111,10 +110,16 @@ def test_collect_memo_updates_changed_file(tmp_path):
     collect_memo(config, db_conn)
     
     cursor = db_conn.cursor()
+    cursor.execute(
+        """
+        UPDATE source_texts
+        SET imported_at = '2000-01-01 00:00:00', updated_at = '2000-01-01 00:00:00'
+        """
+    )
+    db_conn.commit()
+
     cursor.execute("SELECT imported_at FROM source_texts")
     imported_at_first = cursor.fetchone()[0]
-    
-    time.sleep(1.1)  # Ensure timestamp can change
     
     # Update content
     new_content = "New content"
@@ -252,10 +257,10 @@ def test_collect_memo_skips_reembedding_unchanged_chunks(tmp_path):
     collect_memo(project, db_conn)
 
     cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
     cursor.execute("SELECT chunk_id, embedded_at FROM chunk_embeddings")
     first_row = cursor.fetchone()
-
-    time.sleep(1.1)
 
     collect_memo(project, db_conn)
 
@@ -277,6 +282,8 @@ def test_collect_memo_reembeds_only_changed_chunks(tmp_path):
 
     collect_memo(project, db_conn)
     cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
     cursor.execute(
         """
         SELECT c.id, c.chunk_text, e.embedded_at
@@ -287,7 +294,6 @@ def test_collect_memo_reembeds_only_changed_chunks(tmp_path):
     )
     before_rows = cursor.fetchall()
 
-    time.sleep(1.1)
     memo_file.write_text("Keep me\n\nChanged now", encoding="utf-8")
     collect_memo(project, db_conn)
 
@@ -322,10 +328,10 @@ def test_collect_memo_reembeds_when_model_changes(tmp_path):
     collect_memo(project, db_conn, embedding_config=EmbeddingConfig(model="hash-v1"))
 
     cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
     cursor.execute("SELECT chunk_id, embedding_model, embedded_at FROM chunk_embeddings")
     before_row = cursor.fetchone()
-
-    time.sleep(1.1)
 
     new_count, updated_count = collect_memo(
         project,

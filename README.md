@@ -66,6 +66,30 @@ docker compose up kanpe
 `collect memo` は `source_texts` / `chunks` に加えて `chunk_embeddings` も更新します。
 同一内容での再実行時は既存埋め込みを再利用し、chunk 内容または embedding 設定が変わった場合だけ再生成します。
 
+### 開発コンテナで使える追加 CLI
+
+`dev` サービスには Node.js 22 / `npm` と、次の npm グローバル CLI を同梱しています。
+
+- `gemini`
+- `codex`
+- `copilot`
+
+初回は開発コンテナへ入って認証してください。
+認証情報や CLI ごとの設定は `dev-home` volume に保存されるため、`dev` コンテナを作り直しても残ります。
+`dev` サービス起動時に `~/.gemini`、`~/.codex`、`~/.config/github-copilot` を自動作成するため、そのまま認証を始められます。
+
+```bash
+docker compose run --rm dev sh
+
+# 例
+gemini --help
+codex --help
+copilot --help
+```
+
+GitHub Copilot CLI は Node.js 22 以上が必要なため、開発コンテナ側で Node.js 22 を同梱しています。
+これらの開発補助ツールは `Dockerfile.dev` のみに入れており、`app` / `kanpe` の実行用イメージには含めません。
+
 ### 壊れたときのやり直し
 
 コンテナ内部の依存関係や一時状態が壊れた場合は、`./.data` と worktree を残したままコンテナだけ作り直します。

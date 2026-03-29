@@ -39,6 +39,7 @@ def test_compose_supports_disposable_worktree_flow():
     assert kanpe["command"][:2] == ["kanpe", "view"]
     assert "--host" in kanpe["command"]
     assert "0.0.0.0" in kanpe["command"]
+    assert kanpe["ports"] == ["127.0.0.1:8765:8765"]
     assert "uv-cache" in data["volumes"]
 
 
@@ -58,3 +59,4 @@ def test_readme_documents_container_workflow():
     assert "/workspace" in readme
     assert ".data/config.yaml" in readme
     assert "壊れたらコンテナを破棄して再作成" in readme
+    assert "docker compose down -v" in readme

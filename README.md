@@ -63,9 +63,10 @@ docker compose up kanpe
 ### 壊れたときのやり直し
 
 コンテナ内部の依存関係や一時状態が壊れた場合は、`./.data` と worktree を残したままコンテナだけ作り直します。
+`uv-cache` volume に壊れた仮想環境が残る可能性があるので、完全復旧時は volume も削除します。
 
 ```bash
-docker compose down
+docker compose down -v
 docker compose build --no-cache
 docker compose run --rm dev uv run pytest
 ```

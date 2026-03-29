@@ -119,8 +119,8 @@
 
 ## 5. 検証プラン (Verification Plan)
 - `docker compose run --rm dev uv run pytest` が通ること。
-- `docker compose run --rm app kuroko collect memo --config /workspace/.data/config.yaml` が通ること。
-- `docker compose run --rm app shinko insight --config /workspace/.data/config.yaml --input-file /workspace/.data/report.md` が通ること。
+- `docker compose run --rm app kuroko --config /workspace/.data/config.yaml collect memo` が通ること。
+- `docker compose run --rm app shinko --config /workspace/.data/config.yaml insight --input-file /workspace/.data/report.md` が通ること。
 - `docker compose up kanpe` で Web UI を開けること。
 - 開発コンテナを削除して再作成しても、worktree と `.data` の内容が保持されること。
 - 故意にコンテナ内依存関係を壊した後でも、再作成で復旧できること。

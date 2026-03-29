@@ -64,7 +64,7 @@ services:
       - "8765"
       - --no-open-browser
     ports:
-      - "8765:8765"
+      - "127.0.0.1:8765:8765"
 
 volumes:
   uv-cache:

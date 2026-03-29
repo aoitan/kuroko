@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 from kuroko_core.db import init_db
 from kuroko.memo_collector import collect_memo
-from kuroko_core.config import ProjectConfig
+from kuroko_core.config import EmbeddingConfig, ProjectConfig
 
 def test_collect_memo_inserts_new_file(tmp_path):
     # Setup mock project
@@ -110,11 +110,16 @@ def test_collect_memo_updates_changed_file(tmp_path):
     collect_memo(config, db_conn)
     
     cursor = db_conn.cursor()
+    cursor.execute(
+        """
+        UPDATE source_texts
+        SET imported_at = '2000-01-01 00:00:00', updated_at = '2000-01-01 00:00:00'
+        """
+    )
+    db_conn.commit()
+
     cursor.execute("SELECT imported_at FROM source_texts")
     imported_at_first = cursor.fetchone()[0]
-    
-    import time
-    time.sleep(1.1)  # Ensure timestamp can change
     
     # Update content
     new_content = "New content"
@@ -208,4 +213,140 @@ def test_collect_memo_recursive(tmp_path):
     new_count, _ = collect_memo(config, db_conn)
     assert new_count == 2
     
+    db_conn.close()
+
+
+def test_collect_memo_creates_embeddings_for_chunks(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    memo_file = project_root / "memo.md"
+    memo_file.write_text("Block 1\n\nBlock 2", encoding="utf-8")
+
+    db_conn = init_db(":memory:")
+
+    new_count, updated_count = collect_memo(
+        ProjectConfig(name="test_proj", root=str(project_root)),
+        db_conn,
+    )
+
+    assert new_count == 1
+    assert updated_count == 0
+
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM chunks")
+    chunk_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM chunk_embeddings")
+    embedding_count = cursor.fetchone()[0]
+    assert embedding_count == chunk_count == 2
+
+    cursor.execute("SELECT DISTINCT embedding_model, chunking_version FROM chunk_embeddings")
+    assert cursor.fetchall() == [("hash-v1", "1")]
+
+    db_conn.close()
+
+
+def test_collect_memo_skips_reembedding_unchanged_chunks(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    memo_file = project_root / "memo.md"
+    memo_file.write_text("Stable block", encoding="utf-8")
+
+    db_conn = init_db(":memory:")
+    project = ProjectConfig(name="test_proj", root=str(project_root))
+
+    collect_memo(project, db_conn)
+
+    cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
+    cursor.execute("SELECT chunk_id, embedded_at FROM chunk_embeddings")
+    first_row = cursor.fetchone()
+
+    collect_memo(project, db_conn)
+
+    cursor.execute("SELECT chunk_id, embedded_at FROM chunk_embeddings")
+    second_row = cursor.fetchone()
+    assert second_row == first_row
+
+    db_conn.close()
+
+
+def test_collect_memo_reembeds_only_changed_chunks(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    memo_file = project_root / "memo.md"
+    memo_file.write_text("Keep me\n\nChange me", encoding="utf-8")
+
+    db_conn = init_db(":memory:")
+    project = ProjectConfig(name="test_proj", root=str(project_root))
+
+    collect_memo(project, db_conn)
+    cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
+    cursor.execute(
+        """
+        SELECT c.id, c.chunk_text, e.embedded_at
+        FROM chunks c
+        JOIN chunk_embeddings e ON e.chunk_id = c.id
+        ORDER BY c.chunk_index
+        """
+    )
+    before_rows = cursor.fetchall()
+
+    memo_file.write_text("Keep me\n\nChanged now", encoding="utf-8")
+    collect_memo(project, db_conn)
+
+    cursor.execute(
+        """
+        SELECT c.id, c.chunk_text, e.embedded_at
+        FROM chunks c
+        JOIN chunk_embeddings e ON e.chunk_id = c.id
+        ORDER BY c.chunk_index
+        """
+    )
+    after_rows = cursor.fetchall()
+
+    assert after_rows[0][0] == before_rows[0][0]
+    assert after_rows[0][1] == "Keep me"
+    assert after_rows[0][2] == before_rows[0][2]
+    assert after_rows[1][1] == "Changed now"
+    assert after_rows[1][2] > before_rows[1][2]
+
+    db_conn.close()
+
+
+def test_collect_memo_reembeds_when_model_changes(tmp_path):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    memo_file = project_root / "memo.md"
+    memo_file.write_text("Model sensitive block", encoding="utf-8")
+
+    db_conn = init_db(":memory:")
+    project = ProjectConfig(name="test_proj", root=str(project_root))
+
+    collect_memo(project, db_conn, embedding_config=EmbeddingConfig(model="hash-v1"))
+
+    cursor = db_conn.cursor()
+    cursor.execute("UPDATE chunk_embeddings SET embedded_at = '2000-01-01 00:00:00'")
+    db_conn.commit()
+    cursor.execute("SELECT chunk_id, embedding_model, embedded_at FROM chunk_embeddings")
+    before_row = cursor.fetchone()
+
+    new_count, updated_count = collect_memo(
+        project,
+        db_conn,
+        embedding_config=EmbeddingConfig(model="hash-v2"),
+    )
+
+    assert new_count == 0
+    assert updated_count == 0
+
+    cursor.execute("SELECT chunk_id, embedding_model, embedded_at FROM chunk_embeddings")
+    after_row = cursor.fetchone()
+
+    assert after_row[0] == before_row[0]
+    assert after_row[1] == "hash-v2"
+    assert after_row[2] > before_row[2]
+
     db_conn.close()

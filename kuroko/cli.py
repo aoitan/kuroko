@@ -41,7 +41,11 @@ def memo(ctx):
     total_updated = 0
 
     for project in cfg.projects:
-        new_count, updated_count = collect_memo(project, db_conn)
+        new_count, updated_count = collect_memo(
+            project,
+            db_conn,
+            embedding_config=cfg.embedding,
+        )
         total_new += new_count
         total_updated += updated_count
 

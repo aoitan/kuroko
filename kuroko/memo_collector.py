@@ -1,36 +1,172 @@
-import os
 import hashlib
-import glob
+import json
 from pathlib import Path
-from datetime import datetime
-from kuroko_core.config import ProjectConfig
+from typing import Dict, Iterable, List, Optional, Set
+
 from kuroko.chunker import chunk_text
+from kuroko_core.config import EmbeddingConfig, ProjectConfig
+from kuroko_core.embeddings import create_embedding_client
 
 def calculate_hash(content: str) -> str:
     """Calculates the SHA-256 hash of the content."""
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
-def save_chunks(cursor, source_id, raw_text):
-    """Chunks the text and saves them to the chunks table."""
-    # Delete existing chunks for this source
-    cursor.execute("DELETE FROM chunks WHERE source_id = ?", (source_id,))
-    
-    # Generate and insert new chunks
-    chunks = chunk_text(raw_text)
-    for chunk in chunks:
-        cursor.execute("""
-        INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
-        VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            source_id,
-            chunk["chunk_index"],
-            chunk["chunk_text"],
-            chunk["heading"],
-            chunk["block_timestamp"],
-            chunk["chunk_hash"]
-        ))
 
-def collect_memo(project: ProjectConfig, db_conn):
+def _fetch_chunks_for_source(cursor, source_id: int) -> List[Dict]:
+    cursor.execute(
+        """
+        SELECT id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash
+        FROM chunks
+        WHERE source_id = ?
+        ORDER BY chunk_index ASC, id ASC
+        """,
+        (source_id,),
+    )
+    rows = cursor.fetchall()
+    return [
+        {
+            "id": row[0],
+            "chunk_index": row[1],
+            "chunk_text": row[2],
+            "heading": row[3],
+            "block_timestamp": row[4],
+            "chunk_hash": row[5],
+        }
+        for row in rows
+    ]
+
+
+def _pop_matching_chunk(existing_chunks: List[Dict], chunk: Dict) -> Optional[Dict]:
+    for index, existing in enumerate(existing_chunks):
+        if existing["chunk_index"] == chunk["chunk_index"] and existing["chunk_hash"] == chunk["chunk_hash"]:
+            return existing_chunks.pop(index)
+    for index, existing in enumerate(existing_chunks):
+        if existing["chunk_hash"] == chunk["chunk_hash"]:
+            return existing_chunks.pop(index)
+    return None
+
+
+def save_chunks(cursor, source_id, raw_text):
+    """Sync chunks for a source while preserving IDs for unchanged content."""
+    existing_chunks = _fetch_chunks_for_source(cursor, source_id)
+    next_chunks = chunk_text(raw_text)
+
+    current_chunks = []
+    changed_chunk_ids = set()
+
+    for chunk in next_chunks:
+        matched = _pop_matching_chunk(existing_chunks, chunk)
+        if matched:
+            cursor.execute(
+                """
+                UPDATE chunks
+                SET chunk_index = ?, chunk_text = ?, heading = ?, block_timestamp = ?, chunk_hash = ?
+                WHERE id = ?
+                """,
+                (
+                    chunk["chunk_index"],
+                    chunk["chunk_text"],
+                    chunk["heading"],
+                    chunk["block_timestamp"],
+                    chunk["chunk_hash"],
+                    matched["id"],
+                ),
+            )
+            current_chunks.append({"id": matched["id"], **chunk})
+            continue
+
+        cursor.execute(
+            """
+            INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_id,
+                chunk["chunk_index"],
+                chunk["chunk_text"],
+                chunk["heading"],
+                chunk["block_timestamp"],
+                chunk["chunk_hash"],
+            ),
+        )
+        chunk_id = cursor.lastrowid
+        current_chunks.append({"id": chunk_id, **chunk})
+        changed_chunk_ids.add(chunk_id)
+
+    for stale_chunk in existing_chunks:
+        cursor.execute("DELETE FROM chunks WHERE id = ?", (stale_chunk["id"],))
+
+    return current_chunks, changed_chunk_ids
+
+
+def sync_chunk_embeddings(
+    cursor,
+    chunks: Iterable[Dict],
+    changed_chunk_ids: Set[int],
+    embedding_config: Optional[EmbeddingConfig] = None,
+):
+    embedding_cfg = embedding_config or EmbeddingConfig()
+    chunk_list = list(chunks)
+    if not chunk_list:
+        return
+
+    placeholders = ", ".join("?" for _ in chunk_list)
+    chunk_ids = [chunk["id"] for chunk in chunk_list]
+    cursor.execute(
+        f"""
+        SELECT chunk_id, embedding_model, chunking_version
+        FROM chunk_embeddings
+        WHERE chunk_id IN ({placeholders})
+        """,
+        tuple(chunk_ids),
+    )
+    existing_embeddings = {
+        row[0]: {"embedding_model": row[1], "chunking_version": row[2]}
+        for row in cursor.fetchall()
+    }
+
+    target_chunks = []
+    for chunk in chunk_list:
+        record = existing_embeddings.get(chunk["id"])
+        if chunk["id"] in changed_chunk_ids or record is None:
+            target_chunks.append(chunk)
+            continue
+        if record["embedding_model"] != embedding_cfg.model:
+            target_chunks.append(chunk)
+            continue
+        if record["chunking_version"] != embedding_cfg.chunking_version:
+            target_chunks.append(chunk)
+
+    if not target_chunks:
+        return
+
+    client = create_embedding_client(embedding_cfg)
+    vectors = client.embed_texts([chunk["chunk_text"] for chunk in target_chunks])
+    for chunk, vector in zip(target_chunks, vectors):
+        cursor.execute(
+            """
+            INSERT INTO chunk_embeddings (chunk_id, embedding, embedding_model, embedded_at, chunking_version)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(chunk_id) DO UPDATE SET
+                embedding = excluded.embedding,
+                embedding_model = excluded.embedding_model,
+                embedded_at = CURRENT_TIMESTAMP,
+                chunking_version = excluded.chunking_version
+            """,
+            (
+                chunk["id"],
+                json.dumps(vector),
+                embedding_cfg.model,
+                embedding_cfg.chunking_version,
+            ),
+        )
+
+
+def collect_memo(
+    project: ProjectConfig,
+    db_conn,
+    embedding_config: Optional[EmbeddingConfig] = None,
+):
     """
     Collects memo.md files from the project root and saves them to the database.
     Returns (new_count, updated_count).
@@ -67,7 +203,8 @@ def collect_memo(project: ProjectConfig, db_conn):
         if path_row:
             db_id, db_hash = path_row
             if db_hash == file_hash:
-                # Content hasn't changed for this path, skip
+                current_chunks = _fetch_chunks_for_source(cursor, db_id)
+                sync_chunk_embeddings(cursor, current_chunks, set(), embedding_config=embedding_config)
                 continue
                 
             # Content changed, update it
@@ -79,7 +216,13 @@ def collect_memo(project: ProjectConfig, db_conn):
             
             # Update chunks (with error handling)
             try:
-                save_chunks(cursor, db_id, raw_text)
+                current_chunks, changed_chunk_ids = save_chunks(cursor, db_id, raw_text)
+                sync_chunk_embeddings(
+                    cursor,
+                    current_chunks,
+                    changed_chunk_ids,
+                    embedding_config=embedding_config,
+                )
             except Exception as e:
                 # TODO: Log error
                 pass
@@ -103,7 +246,13 @@ def collect_memo(project: ProjectConfig, db_conn):
             source_id = cursor.lastrowid
             # Save initial chunks
             try:
-                save_chunks(cursor, source_id, raw_text)
+                current_chunks, changed_chunk_ids = save_chunks(cursor, source_id, raw_text)
+                sync_chunk_embeddings(
+                    cursor,
+                    current_chunks,
+                    changed_chunk_ids,
+                    embedding_config=embedding_config,
+                )
             except Exception as e:
                 # TODO: Log error
                 pass

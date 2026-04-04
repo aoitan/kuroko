@@ -5,7 +5,7 @@ from datetime import datetime
 
 from kuroko.application import render_report_to_path
 from kuroko.collector import collect_checkpoints, save_checkpoints_to_db
-from kuroko.memo_collector import collect_memo
+from kuroko.memo_collector import collect_memo, re_inference_all
 from kuroko_core.config import load_config
 from kuroko_core.db import init_db
 
@@ -31,11 +31,19 @@ def collect():
 
 
 @collect.command()
+@click.option('--re-inference', is_flag=True, help='Re-run rule-based inference for all stored chunks.')
 @click.pass_context
-def memo(ctx):
+def memo(ctx, re_inference):
     """Collect memo.md files from projects."""
     cfg = ctx.obj['config']
     db_conn = init_db(cfg.db_path)
+
+    if re_inference:
+        click.echo("Re-running rule-based inference for all chunks...")
+        re_inference_all(db_conn)
+        db_conn.close()
+        click.echo("Done.")
+        return
 
     total_new = 0
     total_updated = 0

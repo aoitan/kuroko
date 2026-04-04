@@ -1,9 +1,11 @@
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
 from kuroko.chunker import chunk_text
+from kuroko.inference import InferenceEngine
 from kuroko_core.config import EmbeddingConfig, ProjectConfig
 from kuroko_core.embeddings import create_embedding_client
 
@@ -97,6 +99,59 @@ def save_chunks(cursor, source_id, raw_text):
         cursor.execute("DELETE FROM chunks WHERE id = ?", (stale_chunk["id"],))
 
     return current_chunks, changed_chunk_ids
+
+
+def save_inferences(cursor, chunks: Iterable[Dict], changed_chunk_ids: Set[int]):
+    """Extract and save rule-based inferences for the given chunks."""
+    engine = InferenceEngine()
+    
+    for chunk in chunks:
+        # Only re-inference if the chunk has changed OR no inference exists for it.
+        # However, to keep it simple and robust (as per plan 9), 
+        # we refresh inferences for all chunks associated with the current source
+        # to ensure consistency with latest rules.
+        
+        # 1. Clear existing inferences for this chunk
+        cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
+        
+        # 2. Extract new inferences
+        base_date = None
+        if chunk.get("block_timestamp"):
+            try:
+                base_date = datetime.fromisoformat(chunk["block_timestamp"])
+            except ValueError:
+                pass
+        
+        results = engine.extract(chunk["chunk_text"], base_date=base_date)
+        
+        # 3. Save to DB
+        for res in results:
+            cursor.execute(
+                """
+                INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+                VALUES (?, ?, ?, ?)
+                """,
+                (chunk["id"], res.inference_type, res.content, res.metadata)
+            )
+
+
+def re_inference_all(db_conn):
+    """Re-run inference for all chunks in the database."""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id, chunk_text, block_timestamp FROM chunks")
+    rows = cursor.fetchall()
+    
+    chunks = [
+        {
+            "id": row[0],
+            "chunk_text": row[1],
+            "block_timestamp": row[2]
+        }
+        for row in rows
+    ]
+    
+    save_inferences(cursor, chunks, set())
+    db_conn.commit()
 
 
 def sync_chunk_embeddings(
@@ -217,6 +272,7 @@ def collect_memo(
             # Update chunks (with error handling)
             try:
                 current_chunks, changed_chunk_ids = save_chunks(cursor, db_id, raw_text)
+                save_inferences(cursor, current_chunks, changed_chunk_ids)
                 sync_chunk_embeddings(
                     cursor,
                     current_chunks,
@@ -247,6 +303,7 @@ def collect_memo(
             # Save initial chunks
             try:
                 current_chunks, changed_chunk_ids = save_chunks(cursor, source_id, raw_text)
+                save_inferences(cursor, current_chunks, changed_chunk_ids)
                 sync_chunk_embeddings(
                     cursor,
                     current_chunks,

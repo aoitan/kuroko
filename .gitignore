@@ -12,3 +12,5 @@ checkpoint/*.md
 !checkpoint/.gitkeep
 test_report.md
 memo.md
+
+artifacts/

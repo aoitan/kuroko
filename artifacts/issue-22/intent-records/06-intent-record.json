@@ -1,9 +1,0 @@
-{
-  "issue_number": "22",
-  "issue_source": "github",
-  "github_repo": "aoitan/kuroko",
-  "phase": "review_fix_loop",
-  "runner": "gemini",
-  "prompt_file": "artifacts/issue-22/.generated-prompts/review_fix_loop.prompt.md",
-  "status": "prepared"
-}

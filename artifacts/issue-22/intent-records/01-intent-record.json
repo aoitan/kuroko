@@ -1,9 +1,0 @@
-{
-  "issue_number": "22",
-  "issue_source": "github",
-  "github_repo": "aoitan/kuroko",
-  "phase": "prototype_planning",
-  "runner": "gemini",
-  "prompt_file": "artifacts/issue-22/.generated-prompts/prototype_planning.prompt.md",
-  "status": "prepared"
-}

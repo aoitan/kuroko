@@ -69,5 +69,20 @@ def init_db(db_path: str):
         "CREATE INDEX IF NOT EXISTS idx_chunk_embeddings_model ON chunk_embeddings(embedding_model)"
     )
     
+    # Create inferences table for rule-based extraction results
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS inferences (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chunk_id INTEGER NOT NULL,
+        inference_type TEXT NOT NULL,
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
+    )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inferences_chunk ON inferences(chunk_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_inferences_type ON inferences(inference_type)")
+    
     conn.commit()
     return conn

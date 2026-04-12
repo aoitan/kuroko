@@ -2,8 +2,9 @@ import os
 import sqlite3
 import hashlib
 from pathlib import Path
+import pytest
 from kuroko_core.db import init_db
-from kuroko.memo_collector import collect_memo
+from kuroko.memo_collector import collect_memo, save_inferences
 from kuroko_core.config import EmbeddingConfig, ProjectConfig
 
 def test_collect_memo_inserts_new_file(tmp_path):
@@ -348,5 +349,138 @@ def test_collect_memo_reembeds_when_model_changes(tmp_path):
     assert after_row[0] == before_row[0]
     assert after_row[1] == "hash-v2"
     assert after_row[2] > before_row[2]
+
+    db_conn.close()
+
+
+def test_save_inferences_updates_only_changed_or_missing_chunks():
+    db_conn = init_db(":memory:")
+    cursor = db_conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO source_texts (source_type, path, directory_context, raw_text, file_hash)
+        VALUES ('memo', '/tmp/memo.md', 'tmp', 'foo', 'hash')
+        """
+    )
+    source_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
+        VALUES (?, 0, '既存のまま', NULL, NULL, 'hash-1')
+        """,
+        (source_id,),
+    )
+    unchanged_chunk_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
+        VALUES (?, 1, '明日までに対応', NULL, NULL, 'hash-2')
+        """,
+        (source_id,),
+    )
+    changed_chunk_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
+        VALUES (?, 2, '返信待ち', NULL, NULL, 'hash-3')
+        """,
+        (source_id,),
+    )
+    missing_chunk_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+        VALUES (?, 'TODO', '既存推論', '{}')
+        """,
+        (unchanged_chunk_id,),
+    )
+    cursor.execute(
+        """
+        INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+        VALUES (?, 'TODO', '古い推論', '{}')
+        """,
+        (changed_chunk_id,),
+    )
+    db_conn.commit()
+
+    save_inferences(
+        cursor,
+        [
+            {"id": unchanged_chunk_id, "chunk_text": "既存のまま", "block_timestamp": None},
+            {"id": changed_chunk_id, "chunk_text": "明日までに対応", "block_timestamp": None},
+            {"id": missing_chunk_id, "chunk_text": "返信待ち", "block_timestamp": None},
+        ],
+        {changed_chunk_id},
+    )
+    db_conn.commit()
+
+    cursor.execute(
+        "SELECT inference_type, content FROM inferences WHERE chunk_id = ?",
+        (unchanged_chunk_id,),
+    )
+    assert cursor.fetchall() == [("TODO", "既存推論")]
+
+    cursor.execute(
+        "SELECT inference_type, content FROM inferences WHERE chunk_id = ? ORDER BY id",
+        (changed_chunk_id,),
+    )
+    changed_rows = cursor.fetchall()
+    assert len(changed_rows) == 1
+    assert changed_rows[0][0] == "DEADLINE"
+    assert changed_rows[0][1] == "明日まで"
+
+    cursor.execute(
+        "SELECT inference_type, content FROM inferences WHERE chunk_id = ? ORDER BY id",
+        (missing_chunk_id,),
+    )
+    assert cursor.fetchall() == [("PENDING", "返信待ち")]
+
+    db_conn.close()
+
+
+def test_save_inferences_keeps_existing_rows_when_extraction_fails(monkeypatch):
+    db_conn = init_db(":memory:")
+    cursor = db_conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO source_texts (source_type, path, directory_context, raw_text, file_hash)
+        VALUES ('memo', '/tmp/memo.md', 'tmp', 'foo', 'hash')
+        """
+    )
+    source_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO chunks (source_id, chunk_index, chunk_text, heading, block_timestamp, chunk_hash)
+        VALUES (?, 0, '壊れる', NULL, NULL, 'hash-1')
+        """,
+        (source_id,),
+    )
+    chunk_id = cursor.lastrowid
+    cursor.execute(
+        """
+        INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+        VALUES (?, 'TODO', '既存推論', '{}')
+        """,
+        (chunk_id,),
+    )
+    db_conn.commit()
+
+    def fail_extract(self, text, base_date=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("kuroko.memo_collector.InferenceEngine.extract", fail_extract)
+
+    with pytest.raises(RuntimeError):
+        save_inferences(
+            cursor,
+            [{"id": chunk_id, "chunk_text": "壊れる", "block_timestamp": None}],
+            {chunk_id},
+        )
+
+    cursor.execute(
+        "SELECT inference_type, content FROM inferences WHERE chunk_id = ?",
+        (chunk_id,),
+    )
+    assert cursor.fetchall() == [("TODO", "既存推論")]
 
     db_conn.close()

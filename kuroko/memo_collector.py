@@ -1,9 +1,11 @@
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Set
 
 from kuroko.chunker import chunk_text
+from kuroko.inference import InferenceEngine
 from kuroko_core.config import EmbeddingConfig, ProjectConfig
 from kuroko_core.embeddings import create_embedding_client
 
@@ -97,6 +99,100 @@ def save_chunks(cursor, source_id, raw_text):
         cursor.execute("DELETE FROM chunks WHERE id = ?", (stale_chunk["id"],))
 
     return current_chunks, changed_chunk_ids
+
+
+def save_inferences(cursor, chunks: Iterable[Dict], changed_chunk_ids: Set[int]):
+    """Extract and save rule-based inferences for the given chunks."""
+    engine = InferenceEngine()
+
+    chunk_list = list(chunks)
+    if not chunk_list:
+        return
+
+    target_chunk_ids = set(changed_chunk_ids)
+    if not target_chunk_ids:
+        target_chunk_ids = {chunk["id"] for chunk in chunk_list}
+    else:
+        placeholders = ", ".join("?" for _ in chunk_list)
+        cursor.execute(
+            f"""
+            SELECT c.id
+            FROM chunks c
+            LEFT JOIN inferences i ON i.chunk_id = c.id
+            WHERE c.id IN ({placeholders})
+            GROUP BY c.id
+            HAVING COUNT(i.id) = 0
+            """,
+            tuple(chunk["id"] for chunk in chunk_list),
+        )
+        target_chunk_ids.update(row[0] for row in cursor.fetchall())
+
+    for chunk in chunk_list:
+        if chunk["id"] not in target_chunk_ids:
+            continue
+
+        base_date = None
+        if chunk.get("block_timestamp"):
+            try:
+                base_date = datetime.fromisoformat(chunk["block_timestamp"])
+            except ValueError:
+                pass
+
+        results = engine.extract(chunk["chunk_text"], base_date=base_date)
+
+        savepoint_name = f"save_inferences_chunk_{chunk['id']}"
+        cursor.execute(f"SAVEPOINT {savepoint_name}")
+        try:
+            cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
+            for res in results:
+                cursor.execute(
+                    """
+                    INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (chunk["id"], res.inference_type, res.content, res.metadata)
+                )
+        except Exception:
+            cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            raise
+        finally:
+            cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+
+
+def re_inference_all(db_conn):
+    """Re-run inference for all chunks in the database."""
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT id, chunk_text, block_timestamp FROM chunks")
+    rows = cursor.fetchall()
+
+    chunks = [
+        {
+            "id": row[0],
+            "chunk_text": row[1],
+            "block_timestamp": row[2]
+        }
+        for row in rows
+    ]
+
+    for chunk in chunks:
+        base_date = None
+        if chunk.get("block_timestamp"):
+            try:
+                base_date = datetime.fromisoformat(chunk["block_timestamp"])
+            except ValueError:
+                pass
+
+        results = InferenceEngine().extract(chunk["chunk_text"], base_date=base_date)
+        cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
+        for res in results:
+            cursor.execute(
+                """
+                INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+                VALUES (?, ?, ?, ?)
+                """,
+                (chunk["id"], res.inference_type, res.content, res.metadata)
+            )
+    db_conn.commit()
 
 
 def sync_chunk_embeddings(
@@ -217,6 +313,7 @@ def collect_memo(
             # Update chunks (with error handling)
             try:
                 current_chunks, changed_chunk_ids = save_chunks(cursor, db_id, raw_text)
+                save_inferences(cursor, current_chunks, changed_chunk_ids)
                 sync_chunk_embeddings(
                     cursor,
                     current_chunks,
@@ -247,6 +344,7 @@ def collect_memo(
             # Save initial chunks
             try:
                 current_chunks, changed_chunk_ids = save_chunks(cursor, source_id, raw_text)
+                save_inferences(cursor, current_chunks, changed_chunk_ids)
                 sync_chunk_embeddings(
                     cursor,
                     current_chunks,

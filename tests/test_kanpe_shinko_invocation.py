@@ -22,6 +22,49 @@ def test_invoke_shinko_success():
         assert "--json-output" in args[0]
         assert str(report_path) in args[0]
 
+
+def test_invoke_shinko_prefers_structured_records_for_results():
+    report_path = Path("report.md")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "schema_version": "shinko-insight-v1",
+                    "results": [
+                        {
+                            "project": "kuroko",
+                            "score": 91,
+                            "suggestion": "- legacy suggestion",
+                            "records": [
+                                {
+                                    "kind": "next_action",
+                                    "summary": "依頼先に確認する",
+                                    "judgements": {
+                                        "is_todo": True,
+                                        "is_ongoing": True,
+                                        "should_review_this_week": True,
+                                    },
+                                    "next_action": "担当者へ連絡する",
+                                    "blocked_reason": "先方回答待ち",
+                                }
+                            ],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            stderr="",
+        )
+
+        suggestion = invoke_shinko("shinko", report_path)
+
+    assert "#### kuroko (Score: 91)" in suggestion
+    assert "`next_action` [TODO / 継続 / 今週確認]: 依頼先に確認する" in suggestion
+    assert "next action: 担当者へ連絡する" in suggestion
+    assert "blocked: 先方回答待ち" in suggestion
+    assert "legacy suggestion" not in suggestion
+
 def test_invoke_shinko_custom_cmd():
     report_path = Path("report.md")
     with patch("subprocess.run") as mock_run:

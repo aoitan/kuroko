@@ -175,6 +175,10 @@ kuroko status --json-output
 shinko insight --input-file report.md --json-output
 ```
 
+`shinko insight --json-output` は、DB に `source_texts` / `chunks` / `inferences` がある場合、`schema_version: "shinko-insight-v1"` を持つ structured insight を返します。
+出力には互換用の `suggestion` / `score` も残しますが、主契約は `records[]` です。
+structured insight は SQLite の `shinko_insights` / `shinko_insight_evidence` に保存され、`source_hash`, `model`, `prompt_version`, `schema_version` を使って再利用・再解析判断ができる前提です。
+
 ## LLMエージェントへの統合（推奨）
 
 LLMエージェント（Gemini CLIなど）を使用している場合、`checkpoint` スキルを導入することで、エージェントが自動的に適切な形式で証跡を残せるようになります。

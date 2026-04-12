@@ -64,6 +64,32 @@ def test_init_db_creates_table(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_chunk_embeddings_model';"
     )
     assert cursor.fetchone() is not None
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='inferences';")
+    table = cursor.fetchone()
+    assert table is not None
+    assert table[0] == "inferences"
+
+    cursor.execute("PRAGMA table_info(inferences);")
+    inference_columns = {col[1] for col in cursor.fetchall()}
+    expected_inference_columns = {
+        "id",
+        "chunk_id",
+        "inference_type",
+        "content",
+        "metadata",
+        "created_at",
+    }
+    assert expected_inference_columns.issubset(inference_columns)
+
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_inferences_chunk';"
+    )
+    assert cursor.fetchone() is not None
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_inferences_type';"
+    )
+    assert cursor.fetchone() is not None
     
     conn.close()
 

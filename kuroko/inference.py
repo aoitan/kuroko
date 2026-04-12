@@ -1,8 +1,8 @@
 import re
 import json
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict
-from dataclasses import dataclass, asdict
+from typing import List, Optional
+from dataclasses import dataclass
 
 @dataclass
 class InferenceResult:

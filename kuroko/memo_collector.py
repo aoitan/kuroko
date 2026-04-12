@@ -104,35 +104,59 @@ def save_chunks(cursor, source_id, raw_text):
 def save_inferences(cursor, chunks: Iterable[Dict], changed_chunk_ids: Set[int]):
     """Extract and save rule-based inferences for the given chunks."""
     engine = InferenceEngine()
-    
-    for chunk in chunks:
-        # Only re-inference if the chunk has changed OR no inference exists for it.
-        # However, to keep it simple and robust (as per plan 9), 
-        # we refresh inferences for all chunks associated with the current source
-        # to ensure consistency with latest rules.
-        
-        # 1. Clear existing inferences for this chunk
-        cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
-        
-        # 2. Extract new inferences
+
+    chunk_list = list(chunks)
+    if not chunk_list:
+        return
+
+    target_chunk_ids = set(changed_chunk_ids)
+    if not target_chunk_ids:
+        target_chunk_ids = {chunk["id"] for chunk in chunk_list}
+    else:
+        placeholders = ", ".join("?" for _ in chunk_list)
+        cursor.execute(
+            f"""
+            SELECT c.id
+            FROM chunks c
+            LEFT JOIN inferences i ON i.chunk_id = c.id
+            WHERE c.id IN ({placeholders})
+            GROUP BY c.id
+            HAVING COUNT(i.id) = 0
+            """,
+            tuple(chunk["id"] for chunk in chunk_list),
+        )
+        target_chunk_ids.update(row[0] for row in cursor.fetchall())
+
+    for chunk in chunk_list:
+        if chunk["id"] not in target_chunk_ids:
+            continue
+
         base_date = None
         if chunk.get("block_timestamp"):
             try:
                 base_date = datetime.fromisoformat(chunk["block_timestamp"])
             except ValueError:
                 pass
-        
+
         results = engine.extract(chunk["chunk_text"], base_date=base_date)
-        
-        # 3. Save to DB
-        for res in results:
-            cursor.execute(
-                """
-                INSERT INTO inferences (chunk_id, inference_type, content, metadata)
-                VALUES (?, ?, ?, ?)
-                """,
-                (chunk["id"], res.inference_type, res.content, res.metadata)
-            )
+
+        savepoint_name = f"save_inferences_chunk_{chunk['id']}"
+        cursor.execute(f"SAVEPOINT {savepoint_name}")
+        try:
+            cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
+            for res in results:
+                cursor.execute(
+                    """
+                    INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (chunk["id"], res.inference_type, res.content, res.metadata)
+                )
+        except Exception:
+            cursor.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+            raise
+        finally:
+            cursor.execute(f"RELEASE SAVEPOINT {savepoint_name}")
 
 
 def re_inference_all(db_conn):
@@ -140,7 +164,7 @@ def re_inference_all(db_conn):
     cursor = db_conn.cursor()
     cursor.execute("SELECT id, chunk_text, block_timestamp FROM chunks")
     rows = cursor.fetchall()
-    
+
     chunks = [
         {
             "id": row[0],
@@ -149,8 +173,25 @@ def re_inference_all(db_conn):
         }
         for row in rows
     ]
-    
-    save_inferences(cursor, chunks, set())
+
+    for chunk in chunks:
+        base_date = None
+        if chunk.get("block_timestamp"):
+            try:
+                base_date = datetime.fromisoformat(chunk["block_timestamp"])
+            except ValueError:
+                pass
+
+        results = InferenceEngine().extract(chunk["chunk_text"], base_date=base_date)
+        cursor.execute("DELETE FROM inferences WHERE chunk_id = ?", (chunk["id"],))
+        for res in results:
+            cursor.execute(
+                """
+                INSERT INTO inferences (chunk_id, inference_type, content, metadata)
+                VALUES (?, ?, ?, ?)
+                """,
+                (chunk["id"], res.inference_type, res.content, res.metadata)
+            )
     db_conn.commit()
 
 

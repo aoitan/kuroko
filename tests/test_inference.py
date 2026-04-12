@@ -66,14 +66,10 @@ def test_extract_todo_extended(engine):
     inferences1 = engine.extract(text1)
     assert any(inf.inference_type == "TODO" for inf in inferences1)
 
-    text2 = "修正をお願いします" # 「修正」は verb_todo_weak にマッチするはず
+    text2 = "修正をお願いします"
     inferences2 = engine.extract(text2)
-    # 「修正」が文末（または空白の前）であればマッチ
-    # "修正をお願いします" -> 修正... matches verb_todo_weak? 
-    # いまの正規表現だと `.*?(?:修正)(?:。|\s|$)` なので、"修正" の後に "を" があるとマッチしない。
-    # これは意図通り（「修正を」はTODOではないかもしれない）。
-    # でも「修正すること」ならマッチする。
-    
+    assert not any(inf.inference_type == "TODO" for inf in inferences2)
+
     text3 = "Aさんに共有"
     inferences3 = engine.extract(text3)
     assert any(inf.inference_type == "TODO" for inf in inferences3)

@@ -83,6 +83,52 @@ def init_db(db_path: str):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_inferences_chunk ON inferences(chunk_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_inferences_type ON inferences(inference_type)")
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS shinko_insights (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        summary TEXT NOT NULL,
+        is_todo INTEGER NOT NULL DEFAULT 0,
+        is_ongoing INTEGER NOT NULL DEFAULT 0,
+        should_review_this_week INTEGER NOT NULL DEFAULT 0,
+        blocked_reason TEXT,
+        next_action TEXT,
+        confidence REAL NOT NULL,
+        source_hash TEXT NOT NULL,
+        extractor_version TEXT NOT NULL,
+        model TEXT NOT NULL,
+        prompt_version TEXT NOT NULL,
+        schema_version TEXT NOT NULL,
+        payload_truncated INTEGER NOT NULL DEFAULT 0,
+        analyzed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        invalidated_at DATETIME
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shinko_insights_project_valid ON shinko_insights(project, invalidated_at)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shinko_insights_source_hash ON shinko_insights(source_hash)"
+    )
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS shinko_insight_evidence (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        insight_id INTEGER NOT NULL,
+        source_id INTEGER,
+        chunk_id INTEGER,
+        quote_excerpt TEXT,
+        evidence_order INTEGER NOT NULL DEFAULT 1,
+        FOREIGN KEY (insight_id) REFERENCES shinko_insights(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_id) REFERENCES source_texts(id) ON DELETE SET NULL,
+        FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE SET NULL
+    )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shinko_insight_evidence_insight ON shinko_insight_evidence(insight_id, evidence_order)"
+    )
     
     conn.commit()
     return conn

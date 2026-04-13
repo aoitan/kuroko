@@ -223,13 +223,48 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         raise RuntimeError(f"Failed to parse shinko output as JSON: {exc}") from exc
 
     if "results" in output_data:
-        md_lines = []
-        for item in output_data["results"]:
-            md_lines.append(f"#### {item['project']} (Score: {item.get('score', 0)})")
-            md_lines.append(f"{item.get('suggestion', 'No suggestion')}\n")
-        return "\n".join(md_lines)
+        return _format_shinko_results(output_data["results"])
 
     return output_data.get("suggestion", "")
+
+
+def _format_shinko_results(results: list[dict]) -> str:
+    md_lines = []
+    for item in results:
+        md_lines.append(f"#### {item['project']} (Score: {item.get('score', 0)})")
+        records = item.get("records") or []
+        if records:
+            md_lines.extend(_format_structured_records(records))
+        else:
+            md_lines.append(item.get("suggestion", "No suggestion"))
+        md_lines.append("")
+    return "\n".join(md_lines).strip()
+
+
+def _format_structured_records(records: list[dict]) -> list[str]:
+    lines = []
+    for record in records:
+        labels = []
+        judgements = record.get("judgements") or {}
+        if judgements.get("is_todo"):
+            labels.append("TODO")
+        if judgements.get("is_ongoing"):
+            labels.append("継続")
+        if judgements.get("should_review_this_week"):
+            labels.append("今週確認")
+
+        label_text = f" [{' / '.join(labels)}]" if labels else ""
+        lines.append(f"- `{record.get('kind', 'unknown')}`{label_text}: {record.get('summary', 'No summary')}")
+
+        next_action = record.get("next_action")
+        if next_action:
+            lines.append(f"  next action: {next_action}")
+
+        blocked_reason = record.get("blocked_reason")
+        if blocked_reason:
+            lines.append(f"  blocked: {blocked_reason}")
+
+    return lines
 
 
 @click.group()

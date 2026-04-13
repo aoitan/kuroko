@@ -90,6 +90,45 @@ def test_init_db_creates_table(tmp_path):
         "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_inferences_type';"
     )
     assert cursor.fetchone() is not None
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='shinko_insights';")
+    table = cursor.fetchone()
+    assert table is not None
+    assert table[0] == "shinko_insights"
+
+    cursor.execute("PRAGMA table_info(shinko_insights);")
+    shinko_columns = {col[1] for col in cursor.fetchall()}
+    expected_shinko_columns = {
+        "id",
+        "project",
+        "kind",
+        "summary",
+        "is_todo",
+        "is_ongoing",
+        "should_review_this_week",
+        "blocked_reason",
+        "next_action",
+        "confidence",
+        "source_hash",
+        "extractor_version",
+        "model",
+        "prompt_version",
+        "schema_version",
+        "payload_truncated",
+        "analyzed_at",
+        "invalidated_at",
+    }
+    assert expected_shinko_columns.issubset(shinko_columns)
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='shinko_insight_evidence';")
+    table = cursor.fetchone()
+    assert table is not None
+    assert table[0] == "shinko_insight_evidence"
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_shinko_insights_project_valid';")
+    assert cursor.fetchone() is not None
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_shinko_insight_evidence_insight';")
+    assert cursor.fetchone() is not None
     
     conn.close()
 

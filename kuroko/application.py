@@ -192,61 +192,6 @@ def build_shinko_context(cfg: KurokoConfig, report_path: Path, project: Optional
     raise FileNotFoundError(f"Report file not found: {report_path}")
 
 
-def _build_db_context(db_path: Path, cfg: KurokoConfig, project: Optional[str] = None) -> str:
-    project_roots = []
-    for project_cfg in cfg.projects:
-        if project and project_cfg.name != project:
-            continue
-        project_roots.append(str(Path(project_cfg.root).expanduser()))
-
-    if project and not project_roots:
-        return ""
-
-    conn = sqlite3.connect(str(db_path))
-    try:
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT
-                s.path,
-                s.directory_context,
-                s.raw_text,
-                c.chunk_index,
-                c.chunk_text,
-                c.heading,
-                c.block_timestamp
-            FROM source_texts s
-            LEFT JOIN chunks c ON c.source_id = s.id
-            ORDER BY s.updated_at DESC, s.id DESC, c.chunk_index ASC
-            """
-        )
-        rows = cursor.fetchall()
-    finally:
-        conn.close()
-
-    lines = []
-    seen_sources = set()
-    for path, directory_context, raw_text, chunk_index, chunk_text, heading, block_timestamp in rows:
-        if project_roots and not any(_is_under_project_root(path, root) for root in project_roots):
-            continue
-
-        if path not in seen_sources:
-            seen_sources.add(path)
-            lines.append(f"Source: {path}")
-            if directory_context:
-                lines.append(f"Directory: {directory_context}")
-            lines.append(f"Raw: {raw_text}")
-        if chunk_text:
-            header = f"Chunk {chunk_index}"
-            meta = [value for value in (heading, block_timestamp) if value]
-            if meta:
-                header += f" ({' / '.join(meta)})"
-            lines.append(f"{header}: {chunk_text}")
-        lines.append("")
-
-    return "\n".join(lines).strip()
-
-
 def build_shinko_insight_payload(
     cfg: KurokoConfig,
     *,
@@ -271,8 +216,49 @@ def build_shinko_insight_payload(
     conn = sqlite3.connect(str(db_path))
     try:
         conn.row_factory = sqlite3.Row
+        source_batch_size = max(max_sources or 0, 100)
+        source_offset = 0
+        selected_source_rows: list[sqlite3.Row] = []
+
+        while True:
+            source_rows = conn.execute(
+                """
+                SELECT
+                    s.id AS source_id,
+                    s.path,
+                    s.directory_context,
+                    s.raw_text,
+                    s.file_hash,
+                    s.updated_at
+                FROM source_texts s
+                ORDER BY s.updated_at DESC, s.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (source_batch_size, source_offset),
+            ).fetchall()
+            if not source_rows:
+                break
+
+            for source_row in source_rows:
+                path = source_row["path"]
+                if project_roots and not any(_is_under_project_root(path, root) for root in project_roots):
+                    continue
+                selected_source_rows.append(source_row)
+                if max_sources is not None and len(selected_source_rows) >= max_sources:
+                    break
+
+            if max_sources is not None and len(selected_source_rows) >= max_sources:
+                break
+
+            source_offset += len(source_rows)
+
+        if not selected_source_rows:
+            return None
+
+        selected_source_ids = [row["source_id"] for row in selected_source_rows]
+        placeholders = ", ".join("?" for _ in selected_source_ids)
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 s.id AS source_id,
                 s.path,
@@ -293,8 +279,10 @@ def build_shinko_insight_payload(
             FROM source_texts s
             LEFT JOIN chunks c ON c.source_id = s.id
             LEFT JOIN inferences i ON i.chunk_id = c.id
+            WHERE s.id IN ({placeholders})
             ORDER BY s.updated_at DESC, s.id DESC, c.chunk_index ASC, c.id ASC, i.id ASC
-            """
+            """,
+            selected_source_ids,
         ).fetchall()
     finally:
         conn.close()
@@ -303,12 +291,14 @@ def build_shinko_insight_payload(
     source_order: list[int] = []
     total_chars = 0
     truncated = False
+    exhausted_budget = False
 
     for row in rows:
-        path = row["path"]
-        if project_roots and not any(_is_under_project_root(path, root) for root in project_roots):
-            continue
+        if exhausted_budget:
+            truncated = True
+            break
 
+        path = row["path"]
         source_id = row["source_id"]
         source = sources_by_id.get(source_id)
         if source is None:
@@ -316,9 +306,14 @@ def build_shinko_insight_payload(
                 truncated = True
                 continue
 
-            raw_excerpt, raw_truncated, raw_chars = _allocate_excerpt(row["raw_text"] or "", max_chars - total_chars)
+            remaining_chars = max_chars - total_chars
+            raw_excerpt, raw_truncated, raw_chars = _allocate_excerpt(row["raw_text"] or "", remaining_chars)
             total_chars += raw_chars
             truncated = truncated or raw_truncated
+            if remaining_chars <= 0 or total_chars >= max_chars:
+                exhausted_budget = True
+                if not raw_excerpt:
+                    break
 
             source = {
                 "source_id": source_id,
@@ -344,12 +339,17 @@ def build_shinko_insight_payload(
                 truncated = True
                 continue
 
+            remaining_chars = max_chars - total_chars
             chunk_excerpt, chunk_truncated, chunk_chars = _allocate_excerpt(
                 row["chunk_text"] or "",
-                max_chars - total_chars,
+                remaining_chars,
             )
             total_chars += chunk_chars
             truncated = truncated or chunk_truncated
+            if remaining_chars <= 0 or total_chars >= max_chars:
+                exhausted_budget = True
+                if not chunk_excerpt:
+                    break
             existing_chunk = {
                 "chunk_id": chunk_id,
                 "chunk_index": row["chunk_index"],
@@ -382,7 +382,13 @@ def build_shinko_insight_payload(
                     "source_id": source["source_id"],
                     "path": source["path"],
                     "file_hash": source["file_hash"],
-                    "chunk_hashes": [chunk["chunk_hash"] for chunk in source["chunks"]],
+                    "chunks": [
+                        {
+                            "chunk_hash": chunk["chunk_hash"],
+                            "inferences": chunk["inferences"],
+                        }
+                        for chunk in source["chunks"]
+                    ],
                 }
                 for source in ordered_sources
             ],

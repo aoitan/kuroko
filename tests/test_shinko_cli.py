@@ -210,6 +210,36 @@ projects:
     assert '"raw_text": "memo only context"' in messages[1]["content"]
 
 
+def test_shinko_json_output_uses_legacy_envelope_when_any_result_is_legacy(tmp_path):
+    runner = CliRunner()
+    report_file = tmp_path / "report.md"
+    report_file.write_text("# Status\n| project | status |\n| --- | --- |\n| kuroko | active |", encoding="utf-8")
+    config_path = tmp_path / "kuroko.config.yaml"
+    config_path.write_text(
+        """
+version: 1
+projects:
+  - name: kuroko
+    root: .
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with patch("shinko.cli.LLMClient") as mock_client_class:
+        mock_client = mock_client_class.return_value
+        mock_client.chat_completion.return_value = '{"suggestion":"legacy suggestion","score":1}'
+
+        result = runner.invoke(
+            main,
+            ["--config", str(config_path), "insight", "--input-file", str(report_file), "--json-output"],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["schema_version"] == "legacy-v1"
+    assert payload["results"][0]["schema_version"] == "legacy-v1"
+
+
 def test_shinko_persists_structured_insights(tmp_path):
     runner = CliRunner()
     project_root = tmp_path / "proj"

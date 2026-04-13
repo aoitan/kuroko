@@ -380,9 +380,14 @@ def insight(ctx, input_file, json_output, mode, project, lang):
         results = [future.result() for future in futures]
 
     results.sort(key=lambda item: item['score'], reverse=True)
+    output_schema_version = (
+        SCHEMA_VERSION
+        if results and all(item.get("schema_version") == SCHEMA_VERSION for item in results)
+        else "legacy-v1"
+    )
 
     if json_output:
-        click.echo(json.dumps({"schema_version": SCHEMA_VERSION, "results": results}, ensure_ascii=False, indent=2))
+        click.echo(json.dumps({"schema_version": output_schema_version, "results": results}, ensure_ascii=False, indent=2))
     else:
         title = "### 推奨される次の一手 (優先順位順)\n" if lang.lower() == "japanese" else "### Recommended Next Steps\n"
         output = [title]

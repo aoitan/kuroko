@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 import click
 
-from kanpe.cli import render_markdown_to_html, refresh_report
+from kanpe.cli import is_valid_nonce, render_markdown_to_html, refresh_report
 
 def test_render_html_has_refresh_button():
     html = render_markdown_to_html("# Title", nonce="test-nonce")
@@ -17,8 +17,16 @@ def test_render_html_has_suggest_buttons():
     assert "🔍 深掘り" in html
     assert "id=\"suggest-btn-normal\"" in html
     assert "id=\"project-select\"" in html
+    assert "id=\"view-select\"" in html
+    assert "案件別ブリーフ" in html
     assert "getSuggestion('normal')" in html
     assert "nonce': 'test-nonce'" in html
+
+
+def test_is_valid_nonce_accepts_only_matching_values():
+    assert is_valid_nonce("test-nonce", "test-nonce") is True
+    assert is_valid_nonce("wrong", "test-nonce") is False
+    assert is_valid_nonce(None, "test-nonce") is False
 
 
 def test_refresh_report_uses_shared_renderer_without_subprocess(tmp_path):

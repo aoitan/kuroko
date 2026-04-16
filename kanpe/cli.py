@@ -6,7 +6,6 @@ import socketserver
 import subprocess
 import sys
 import webbrowser
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -14,6 +13,7 @@ import bleach
 import click
 from markdown import markdown
 
+from kanpe.brief_formatter import VIEW_PROJECT_BRIEF, format_shinko_results
 from kuroko.application import parse_report_args, render_report_to_path
 from kuroko_core.config import load_config
 from kuroko_core.history import HistoryLogger, get_repo_root
@@ -44,6 +44,16 @@ HTML_TEMPLATE = """<!doctype html>
         <label for="project-select" style="font-size: 0.85rem; margin-right: 0.5rem; color: #666;">対象:</label>
         <select id="project-select" style="padding: 0.4rem; border-radius: 4px; border: 1px solid #ccc; font-size: 0.9rem;">
           <option value="">(全体)</option>
+        </select>
+      </div>
+      <div style="margin-right: 1rem; display: flex; align-items: center;">
+        <label for="view-select" style="font-size: 0.85rem; margin-right: 0.5rem; color: #666;">ビュー:</label>
+        <select id="view-select" style="padding: 0.4rem; border-radius: 4px; border: 1px solid #ccc; font-size: 0.9rem;">
+          <option value="project_brief">案件別ブリーフ</option>
+          <option value="pending">pending 一覧</option>
+          <option value="next_actions">次アクション候補</option>
+          <option value="daily">今日のメモ要約</option>
+          <option value="weekly">今週の宿題候補</option>
         </select>
       </div>
       <div style="margin-right: 1rem; display: flex; align-items: center;">
@@ -101,11 +111,12 @@ HTML_TEMPLATE = """<!doctype html>
         const box = document.getElementById('suggestion-box');
         const content = document.getElementById('suggestion-content');
         const project = document.getElementById('project-select').value;
+        const view = document.getElementById('view-select').value;
         const lang = document.getElementById('lang-select').value;
 
         btns.forEach(b => b.classList.add('loading'));
         box.style.display = 'block';
-        content.innerText = 'LLMに問い合わせています... (' + mode + (project ? ' / ' + project : '') + ' / ' + lang + ')';
+        content.innerText = 'LLMに問い合わせています... (' + mode + ' / ' + view + (project ? ' / ' + project : '') + ' / ' + lang + ')';
 
         try {{
           const response = await fetch('/suggest', {{
@@ -114,6 +125,7 @@ HTML_TEMPLATE = """<!doctype html>
               'nonce': '{nonce}',
               'mode': mode,
               'project': project,
+              'view': view,
               'lang': lang
             }})
           }});
@@ -171,6 +183,10 @@ def render_markdown_to_html(markdown_text: str, nonce: str, default_lang: str = 
     return HTML_TEMPLATE.format(content=content, nonce=nonce, lang_options=lang_options)
 
 
+def is_valid_nonce(received_nonce: str | None, expected_nonce: str) -> bool:
+    return bool(received_nonce) and secrets.compare_digest(received_nonce, expected_nonce)
+
+
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False, config: str = None) -> None:
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
@@ -190,7 +206,16 @@ def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include
         raise click.ClickException(str(exc)) from exc
 
 
-def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: str = None, project: str = None, lang: str = None, timeout: int = 120) -> str:
+def invoke_shinko(
+    shinko_cmd: str,
+    report_path: Path,
+    config: str = None,
+    mode: str = None,
+    project: str = None,
+    lang: str = None,
+    timeout: int = 120,
+    brief_view: str = VIEW_PROJECT_BRIEF,
+) -> str:
     if shinko_cmd == "shinko":
         cmd = [sys.executable, "-m", "shinko.cli", "insight", "--input-file", str(report_path), "--json-output"]
     else:
@@ -223,22 +248,13 @@ def invoke_shinko(shinko_cmd: str, report_path: Path, config: str = None, mode: 
         raise RuntimeError(f"Failed to parse shinko output as JSON: {exc}") from exc
 
     if "results" in output_data:
-        return _format_shinko_results(output_data["results"])
+        return _format_shinko_results(output_data["results"], brief_view=brief_view)
 
     return output_data.get("suggestion", "")
 
 
-def _format_shinko_results(results: list[dict]) -> str:
-    md_lines = []
-    for item in results:
-        md_lines.append(f"#### {item['project']} (Score: {item.get('score', 0)})")
-        records = item.get("records") or []
-        if records:
-            md_lines.extend(_format_structured_records(records))
-        else:
-            md_lines.append(item.get("suggestion", "No suggestion"))
-        md_lines.append("")
-    return "\n".join(md_lines).strip()
+def _format_shinko_results(results: list[dict], brief_view: str = VIEW_PROJECT_BRIEF) -> str:
+    return format_shinko_results(results, view=brief_view)
 
 
 def _format_structured_records(records: list[dict]) -> list[str]:
@@ -344,6 +360,18 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            from urllib.parse import parse_qs
+
+            params = {k: v[0] for k, v in parse_qs(post_data).items()}
+            if not is_valid_nonce(params.get("nonce"), current_nonce):
+                self.send_response(403)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.end_headers()
+                self.wfile.write("invalid nonce".encode('utf-8'))
+                return
+
             if self.path == '/refresh':
                 refresh_report(
                     report_path=report_path,
@@ -358,11 +386,6 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
                 return
 
             if self.path == '/suggest':
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length).decode('utf-8')
-                from urllib.parse import parse_qs
-
-                params = {k: v[0] for k, v in parse_qs(post_data).items()}
                 mode = params.get("mode")
                 project = params.get("project")
                 lang = params.get("lang")
@@ -374,6 +397,7 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
                     project=project,
                     lang=lang,
                     timeout=cfg.llm.timeout + 10,
+                    brief_view=params.get("view") or VIEW_PROJECT_BRIEF,
                 )
                 suggestion_html = clean_html(markdown(suggestion, extensions=["extra"]))
                 self.send_response(200)

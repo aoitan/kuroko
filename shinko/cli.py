@@ -3,7 +3,7 @@ import re
 import sys
 import traceback
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -345,12 +345,14 @@ def insight(ctx, input_file, json_output, mode, project, lang):
                     payload_truncated=structured_payload["truncated"],
                     records=data["records"],
                 )
+                analyzed_at = datetime.now(timezone.utc).isoformat()
                 return {
                     "project": proj,
                     "schema_version": data["schema_version"],
                     "suggestion": data["suggestion"],
                     "score": data["score"],
                     "records": data["records"],
+                    "analyzed_at": analyzed_at,
                     "truncated": structured_payload["truncated"],
                     "source_hash": structured_payload["source_hash"],
                 }

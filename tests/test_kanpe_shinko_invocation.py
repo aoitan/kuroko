@@ -59,10 +59,14 @@ def test_invoke_shinko_prefers_structured_records_for_results():
 
         suggestion = invoke_shinko("shinko", report_path)
 
-    assert "#### kuroko (Score: 91)" in suggestion
-    assert "`next_action` [TODO / 継続 / 今週確認]: 依頼先に確認する" in suggestion
-    assert "next action: 担当者へ連絡する" in suggestion
-    assert "blocked: 先方回答待ち" in suggestion
+    assert "## 案件別ブリーフ" in suggestion
+    assert "### kuroko" in suggestion
+    assert "#### Pending" in suggestion
+    assert "- 依頼先に確認する" in suggestion
+    assert "#### Next Actions" in suggestion
+    assert "- 担当者へ連絡する" in suggestion
+    assert "#### Caution" in suggestion
+    assert "- 先方回答待ち" in suggestion
     assert "legacy suggestion" not in suggestion
 
 def test_invoke_shinko_custom_cmd():

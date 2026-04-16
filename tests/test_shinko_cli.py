@@ -142,6 +142,7 @@ projects:
     payload = json.loads(result.output)
     assert payload["schema_version"] == "shinko-insight-v1"
     assert payload["results"][0]["records"][0]["summary"] == "DB-based suggestion"
+    assert payload["results"][0]["analyzed_at"]
 
 
 def test_shinko_can_run_without_report_file_when_db_context_exists(tmp_path):

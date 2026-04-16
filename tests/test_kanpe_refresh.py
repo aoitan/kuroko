@@ -17,6 +17,8 @@ def test_render_html_has_suggest_buttons():
     assert "🔍 深掘り" in html
     assert "id=\"suggest-btn-normal\"" in html
     assert "id=\"project-select\"" in html
+    assert "id=\"view-select\"" in html
+    assert "案件別ブリーフ" in html
     assert "getSuggestion('normal')" in html
     assert "nonce': 'test-nonce'" in html
 

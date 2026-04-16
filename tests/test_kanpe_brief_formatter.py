@@ -204,3 +204,8 @@ def test_weekly_view_uses_review_and_todo_signals():
     assert "## 今週の宿題候補" in rendered
     assert "- 週内に仕様確認が必要" in rendered
     assert "- 検証項目を整理する" in rendered
+
+
+def test_empty_results_message_is_japanese():
+    rendered = format_shinko_results([], view=VIEW_PROJECT_BRIEF)
+    assert rendered == "構造化インサイトの結果はありません。"

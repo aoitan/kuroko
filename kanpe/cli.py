@@ -6,7 +6,6 @@ import socketserver
 import subprocess
 import sys
 import webbrowser
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -184,6 +183,10 @@ def render_markdown_to_html(markdown_text: str, nonce: str, default_lang: str = 
     return HTML_TEMPLATE.format(content=content, nonce=nonce, lang_options=lang_options)
 
 
+def is_valid_nonce(received_nonce: str | None, expected_nonce: str) -> bool:
+    return bool(received_nonce) and secrets.compare_digest(received_nonce, expected_nonce)
+
+
 def refresh_report(report_path: Path, kuroko_cmd: str, report_args: str, include_worklist: bool = False, config: str = None) -> None:
     auto_include_worklist = include_worklist
     if not auto_include_worklist and report_path.exists():
@@ -357,6 +360,18 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self):
+            content_length = int(self.headers.get('Content-Length', 0))
+            post_data = self.rfile.read(content_length).decode('utf-8')
+            from urllib.parse import parse_qs
+
+            params = {k: v[0] for k, v in parse_qs(post_data).items()}
+            if not is_valid_nonce(params.get("nonce"), current_nonce):
+                self.send_response(403)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.end_headers()
+                self.wfile.write("invalid nonce".encode('utf-8'))
+                return
+
             if self.path == '/refresh':
                 refresh_report(
                     report_path=report_path,
@@ -371,11 +386,6 @@ def view(ctx, input_file, refresh, report_args, include_worklist, kanpe_cmd, shi
                 return
 
             if self.path == '/suggest':
-                content_length = int(self.headers.get('Content-Length', 0))
-                post_data = self.rfile.read(content_length).decode('utf-8')
-                from urllib.parse import parse_qs
-
-                params = {k: v[0] for k, v in parse_qs(post_data).items()}
                 mode = params.get("mode")
                 project = params.get("project")
                 lang = params.get("lang")

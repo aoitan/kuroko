@@ -25,7 +25,7 @@ def format_shinko_results(results: list[dict], *, view: str = VIEW_PROJECT_BRIEF
 
     normalized = [_normalize_result(item) for item in results]
     if not normalized:
-        return "No structured insight results."
+        return "構造化インサイトの結果はありません。"
 
     if view == VIEW_PENDING:
         return _format_pending_view(normalized)
@@ -180,9 +180,10 @@ def _format_daily_view(results: list[dict]) -> str:
             lines.append("")
             continue
         rendered_any = True
-        for item in _collect_summaries(result["records"], limit=2):
+        summaries = _collect_summaries(result["records"], limit=2)
+        for item in summaries:
             lines.append(f"- {item['text']}")
-        if not _collect_summaries(result["records"], limit=2):
+        if not summaries:
             lines.append("- 未抽出: summary に使える structured summary がありません。")
         lines.append("")
 
